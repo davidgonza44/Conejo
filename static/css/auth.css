@@ -1,0 +1,10 @@
+/* Ajustes mínimos sobre Tabler para las páginas de autenticación. */
+
+.page-center .container-tight {
+    max-width: 30rem;
+}
+
+/* El código de desarrollo del passwordless debe poder copiarse fácil. */
+#pwl-dev-token {
+    word-break: break-all;
+}

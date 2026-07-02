@@ -1,5 +1,5 @@
 """Application factory del sistema de inventario."""
-from flask import Flask, jsonify
+from flask import Flask, jsonify, redirect, request, url_for
 
 from app.config import Config
 from app.extensions import db, login_manager, oauth
@@ -19,7 +19,10 @@ def create_app(config_class: type = Config) -> Flask:
 
     @login_manager.unauthorized_handler
     def handle_unauthorized():
-        return jsonify({"error": "Autenticación requerida."}), 401
+        # Las rutas /api siguen siendo JSON puro; las páginas web redirigen al login.
+        if request.path.startswith("/api/"):
+            return jsonify({"error": "Autenticación requerida."}), 401
+        return redirect(url_for("pages.login"))
 
     from app import models  # noqa: F401  (registra los modelos en SQLAlchemy)
 
@@ -31,6 +34,7 @@ def create_app(config_class: type = Config) -> Flask:
     from app.routes.inventory import inventory_bp
     from app.routes.delivery_notes import delivery_notes_bp
     from app.routes.reports import reports_bp
+    from app.routes.pages import pages_bp
 
     app.register_blueprint(main_bp)
     app.register_blueprint(auth_bp)
@@ -40,6 +44,7 @@ def create_app(config_class: type = Config) -> Flask:
     app.register_blueprint(inventory_bp)
     app.register_blueprint(delivery_notes_bp)
     app.register_blueprint(reports_bp)
+    app.register_blueprint(pages_bp)
 
     from app.services.exceptions import ApiError
 
