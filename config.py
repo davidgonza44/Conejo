@@ -10,6 +10,13 @@ load_dotenv()
 class Config:
     SECRET_KEY = os.getenv("SECRET_KEY", "clave-insegura-solo-desarrollo")
 
+    # 'development' o 'production'. En desarrollo, el token passwordless se
+    # devuelve en la respuesta para pruebas; en producción, jamás.
+    APP_ENV = os.getenv("APP_ENV", "development")
+
+    # Minutos de vigencia del token passwordless.
+    PASSWORDLESS_TOKEN_MINUTES = int(os.getenv("PASSWORDLESS_TOKEN_MINUTES", "15"))
+
     DB_HOST = os.getenv("DB_HOST", "localhost")
     DB_PORT = os.getenv("DB_PORT", "3306")
     DB_USER = os.getenv("DB_USER", "root")

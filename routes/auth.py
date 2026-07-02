@@ -9,3 +9,13 @@ auth_bp.add_url_rule("/register", view_func=auth_controller.register, methods=["
 auth_bp.add_url_rule("/login", view_func=auth_controller.login, methods=["POST"])
 auth_bp.add_url_rule("/logout", view_func=auth_controller.logout, methods=["POST"])
 auth_bp.add_url_rule("/me", view_func=auth_controller.me, methods=["GET"])
+auth_bp.add_url_rule(
+    "/passwordless/request",
+    view_func=auth_controller.passwordless_request,
+    methods=["POST"],
+)
+auth_bp.add_url_rule(
+    "/passwordless/verify",
+    view_func=auth_controller.passwordless_verify,
+    methods=["POST"],
+)

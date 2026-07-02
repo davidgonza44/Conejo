@@ -2,7 +2,7 @@
 from flask import jsonify, request
 from flask_login import current_user
 
-from app.services import auth_service
+from app.services import auth_service, passwordless_service
 from app.services.exceptions import ValidationError
 
 
@@ -32,3 +32,13 @@ def me():
     if not current_user.is_authenticated:
         return jsonify({"error": "No hay sesión activa."}), 401
     return jsonify(current_user.to_dict())
+
+
+def passwordless_request():
+    response = passwordless_service.request_token(_json_body())
+    return jsonify(response)
+
+
+def passwordless_verify():
+    user = passwordless_service.verify(_json_body())
+    return jsonify({"message": f"Bienvenido, {user.name}.", "user": user.to_dict()})
