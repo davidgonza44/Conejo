@@ -4,8 +4,10 @@ Este módulo es el ÚNICO camino permitido para modificar el stock de un
 producto (regla 1): cada cambio crea un registro en stock_movements y
 actualiza current_stock dentro de la misma transacción.
 """
+from flask_login import current_user
+
 from app.extensions import db
-from app.models import Product, StockMovement, User
+from app.models import Product, StockMovement
 from app.models.stock_movement import (
     MOVEMENT_AJUSTE,
     MOVEMENT_ENTRADA,
@@ -37,18 +39,14 @@ def _get_active_product_locked(product_id) -> Product:
     return product
 
 
-def _validate_user_id(data: dict) -> int | None:
-    """user_id es opcional mientras no exista autenticación (regla 8)."""
-    user_id = data.get("user_id")
-    if user_id is None:
-        return None
-    try:
-        user_id = int(user_id)
-    except (TypeError, ValueError):
-        raise ValidationError("El campo 'user_id' debe ser un número entero.")
-    if db.session.get(User, user_id) is None:
-        raise ValidationError(f"El usuario con id {user_id} no existe.")
-    return user_id
+def _current_user_id(data: dict) -> int:
+    """El user_id se toma SIEMPRE del usuario autenticado, nunca del body."""
+    if "user_id" in data:
+        raise ValidationError(
+            "El campo 'user_id' no se acepta en el body: el movimiento se "
+            "registra a nombre del usuario autenticado."
+        )
+    return current_user.id
 
 
 def _positive_quantity(data: dict) -> int:
@@ -90,7 +88,7 @@ def register_entry(data: dict) -> StockMovement:
     """Regla 2: una entrada aumenta el stock."""
     product = _get_active_product_locked(data.get("product_id"))
     quantity = _positive_quantity(data)
-    user_id = _validate_user_id(data)
+    user_id = _current_user_id(data)
     reason = (data.get("reason") or "").strip() or None
 
     new_stock = product.current_stock + quantity
@@ -101,7 +99,7 @@ def register_exit(data: dict) -> StockMovement:
     """Regla 3: una salida disminuye el stock. Regla 5: nunca por debajo de cero."""
     product = _get_active_product_locked(data.get("product_id"))
     quantity = _positive_quantity(data)
-    user_id = _validate_user_id(data)
+    user_id = _current_user_id(data)
     reason = (data.get("reason") or "").strip() or None
 
     if quantity > product.current_stock:
@@ -117,7 +115,7 @@ def register_exit(data: dict) -> StockMovement:
 def register_adjustment(data: dict) -> StockMovement:
     """Regla 4: un ajuste establece un nuevo valor de stock y exige motivo."""
     product = _get_active_product_locked(data.get("product_id"))
-    user_id = _validate_user_id(data)
+    user_id = _current_user_id(data)
 
     reason = (data.get("reason") or "").strip()
     if not reason:

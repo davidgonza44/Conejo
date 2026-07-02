@@ -11,16 +11,23 @@ def create_app(config_class: type = Config) -> Flask:
 
     db.init_app(app)
     login_manager.init_app(app)
-    login_manager.login_view = "auth.login"
+
+    @login_manager.unauthorized_handler
+    def handle_unauthorized():
+        return jsonify({"error": "Autenticación requerida."}), 401
 
     from app import models  # noqa: F401  (registra los modelos en SQLAlchemy)
 
     from app.routes.main import main_bp
+    from app.routes.auth import auth_bp
+    from app.routes.users import users_bp
     from app.routes.categories import categories_bp
     from app.routes.products import products_bp
     from app.routes.inventory import inventory_bp
 
     app.register_blueprint(main_bp)
+    app.register_blueprint(auth_bp)
+    app.register_blueprint(users_bp)
     app.register_blueprint(categories_bp)
     app.register_blueprint(products_bp)
     app.register_blueprint(inventory_bp)
