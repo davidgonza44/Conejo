@@ -30,6 +30,7 @@ def create_app(config_class: type = Config) -> Flask:
     from app.routes.products import products_bp
     from app.routes.inventory import inventory_bp
     from app.routes.delivery_notes import delivery_notes_bp
+    from app.routes.reports import reports_bp
 
     app.register_blueprint(main_bp)
     app.register_blueprint(auth_bp)
@@ -38,6 +39,7 @@ def create_app(config_class: type = Config) -> Flask:
     app.register_blueprint(products_bp)
     app.register_blueprint(inventory_bp)
     app.register_blueprint(delivery_notes_bp)
+    app.register_blueprint(reports_bp)
 
     from app.services.exceptions import ApiError
 
