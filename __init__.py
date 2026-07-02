@@ -2,7 +2,7 @@
 from flask import Flask, jsonify
 
 from app.config import Config
-from app.extensions import db, login_manager
+from app.extensions import db, login_manager, oauth
 
 
 def create_app(config_class: type = Config) -> Flask:
@@ -11,6 +11,11 @@ def create_app(config_class: type = Config) -> Flask:
 
     db.init_app(app)
     login_manager.init_app(app)
+    oauth.init_app(app)
+
+    from app.services.google_auth_service import register_oauth_client
+
+    register_oauth_client(app)
 
     @login_manager.unauthorized_handler
     def handle_unauthorized():
@@ -24,6 +29,7 @@ def create_app(config_class: type = Config) -> Flask:
     from app.routes.categories import categories_bp
     from app.routes.products import products_bp
     from app.routes.inventory import inventory_bp
+    from app.routes.delivery_notes import delivery_notes_bp
 
     app.register_blueprint(main_bp)
     app.register_blueprint(auth_bp)
@@ -31,6 +37,7 @@ def create_app(config_class: type = Config) -> Flask:
     app.register_blueprint(categories_bp)
     app.register_blueprint(products_bp)
     app.register_blueprint(inventory_bp)
+    app.register_blueprint(delivery_notes_bp)
 
     from app.services.exceptions import ApiError
 

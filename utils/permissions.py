@@ -10,7 +10,9 @@ PRODUCTS_WRITE = "products:write"
 CATEGORIES_WRITE = "categories:write"
 INVENTORY_MOVE = "inventory:move"      # entradas, salidas y ajustes manuales
 INVENTORY_READ = "inventory:read"      # historial de movimientos
+DELIVERY_NOTES_READ = "delivery_notes:read"
 DELIVERY_NOTES_CREATE = "delivery_notes:create"
+DELIVERY_NOTES_CANCEL = "delivery_notes:cancel"
 REPORTS_READ = "reports:read"
 USERS_MANAGE = "users:manage"
 
@@ -20,7 +22,9 @@ _ALL_PERMISSIONS = {
     CATEGORIES_WRITE,
     INVENTORY_MOVE,
     INVENTORY_READ,
+    DELIVERY_NOTES_READ,
     DELIVERY_NOTES_CREATE,
+    DELIVERY_NOTES_CANCEL,
     REPORTS_READ,
     USERS_MANAGE,
 }
@@ -33,10 +37,13 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         CATEGORIES_WRITE,
         INVENTORY_MOVE,
         INVENTORY_READ,
+        DELIVERY_NOTES_READ,
+        DELIVERY_NOTES_CANCEL,
         REPORTS_READ,
     },
     ROLE_VENDEDOR: {
         PRODUCTS_READ,
+        DELIVERY_NOTES_READ,
         DELIVERY_NOTES_CREATE,
     },
 }

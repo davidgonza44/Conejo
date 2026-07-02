@@ -33,7 +33,11 @@ class User(UserMixin, db.Model):
     )
 
     stock_movements = db.relationship("StockMovement", back_populates="user")
-    delivery_notes = db.relationship("DeliveryNote", back_populates="creator")
+    delivery_notes = db.relationship(
+        "DeliveryNote",
+        back_populates="creator",
+        foreign_keys="DeliveryNote.created_by_user_id",
+    )
     identities = db.relationship(
         "AuthIdentity", back_populates="user", cascade="all, delete-orphan"
     )

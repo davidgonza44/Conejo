@@ -1,8 +1,9 @@
 """Controlador de autenticación: traduce HTTP <-> servicio."""
-from flask import jsonify, request
+from flask import current_app, jsonify, request
 from flask_login import current_user
 
-from app.services import auth_service, passwordless_service
+from app.extensions import oauth
+from app.services import auth_service, google_auth_service, passwordless_service
 from app.services.exceptions import ValidationError
 
 
@@ -42,3 +43,29 @@ def passwordless_request():
 def passwordless_verify():
     user = passwordless_service.verify(_json_body())
     return jsonify({"message": f"Bienvenido, {user.name}.", "user": user.to_dict()})
+
+
+def google_login():
+    """Redirige al consentimiento de Google (flujo Authorization Code + OIDC)."""
+    google_auth_service.ensure_configured()
+    redirect_uri = current_app.config["GOOGLE_REDIRECT_URI"]
+    return oauth.google.authorize_redirect(redirect_uri)
+
+
+def google_callback():
+    """Recibe el code de Google, valida el id_token e inicia la sesión."""
+    google_auth_service.ensure_configured()
+    # authorize_access_token valida firma, audiencia, emisor, expiración y
+    # nonce del id_token según la metadata OIDC de Google.
+    token = oauth.google.authorize_access_token()
+    userinfo = token.get("userinfo")
+    if not userinfo:
+        raise ValidationError("Google no devolvió el id_token esperado.", status_code=401)
+
+    user, action = google_auth_service.login_from_userinfo(dict(userinfo))
+    messages = {
+        "login": f"Bienvenido, {user.name}.",
+        "linked": f"Cuenta de Google vinculada. Bienvenido, {user.name}.",
+        "created": f"Usuario creado con Google. Bienvenido, {user.name}.",
+    }
+    return jsonify({"message": messages[action], "action": action, "user": user.to_dict()})

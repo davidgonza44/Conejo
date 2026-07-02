@@ -19,3 +19,9 @@ auth_bp.add_url_rule(
     view_func=auth_controller.passwordless_verify,
     methods=["POST"],
 )
+auth_bp.add_url_rule(
+    "/google/login", view_func=auth_controller.google_login, methods=["GET"]
+)
+auth_bp.add_url_rule(
+    "/google/callback", view_func=auth_controller.google_callback, methods=["GET"]
+)
