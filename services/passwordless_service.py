@@ -7,6 +7,7 @@ Seguridad:
 - El token expira (PASSWORDLESS_TOKEN_MINUTES) y se invalida al usarse.
 """
 import hashlib
+import logging
 import re
 import secrets
 from datetime import datetime, timedelta
@@ -17,7 +18,10 @@ from flask_login import login_user
 from app.extensions import db
 from app.models import AuthIdentity, PasswordlessToken, User
 from app.models.auth_identity import PROVIDER_PASSWORDLESS
+from app.services import email_service
 from app.services.exceptions import ValidationError
+
+logger = logging.getLogger(__name__)
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
@@ -35,6 +39,35 @@ def _clean_email(data: dict) -> str:
     if not _EMAIL_RE.match(email):
         raise ValidationError("El campo 'email' no tiene un formato válido.")
     return email
+
+
+def _send_token_email(user: User, token: str, minutes: int) -> None:
+    """Envía el código passwordless por correo real cuando MAIL_ENABLED=true.
+
+    En development los errores de correo se propagan como JSON claro para
+    poder diagnosticarlos; en production solo se registran y la respuesta
+    sigue siendo neutra (anti-enumeración).
+    """
+    if not email_service.is_enabled():
+        return
+    base_url = current_app.config["APP_BASE_URL"].rstrip("/")
+    try:
+        email_service.send_template_email(
+            to=user.email,
+            subject=f"Su código de acceso — {current_app.config['MAIL_FROM_NAME']}",
+            template="passwordless",
+            user_name=user.name,
+            token=token,
+            expires_minutes=minutes,
+            login_url=f"{base_url}/login",
+        )
+    except email_service.EmailError:
+        if current_app.config["APP_ENV"] == "development":
+            raise
+        logger.warning(
+            "No se pudo enviar el código passwordless a %s.",
+            email_service.mask_email(user.email),
+        )
 
 
 def request_token(data: dict) -> dict:
@@ -69,7 +102,10 @@ def request_token(data: dict) -> dict:
     )
     db.session.commit()
 
-    # TODO (fase posterior): enviar el token por correo (SMTP).
+    # Envío por correo real (si MAIL_ENABLED=true). La lógica de seguridad
+    # del token (hash, un solo uso, expiración) no cambia.
+    _send_token_email(user, token, minutes)
+
     if current_app.config["APP_ENV"] == "development":
         response["dev_token"] = token
         response["expires_in_minutes"] = minutes

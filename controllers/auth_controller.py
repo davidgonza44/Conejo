@@ -3,7 +3,12 @@ from flask import current_app, jsonify, request
 from flask_login import current_user
 
 from app.extensions import oauth
-from app.services import auth_service, google_auth_service, passwordless_service
+from app.services import (
+    auth_service,
+    google_auth_service,
+    password_reset_service,
+    passwordless_service,
+)
 from app.services.exceptions import ValidationError
 
 
@@ -43,6 +48,16 @@ def passwordless_request():
 def passwordless_verify():
     user = passwordless_service.verify(_json_body())
     return jsonify({"message": f"Bienvenido, {user.name}.", "user": user.to_dict()})
+
+
+def password_reset_request():
+    response = password_reset_service.request_reset(_json_body())
+    return jsonify(response)
+
+
+def password_reset_confirm():
+    response = password_reset_service.confirm_reset(_json_body())
+    return jsonify(response)
 
 
 def google_login():

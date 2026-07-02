@@ -1,0 +1,330 @@
+{% extends "base_app.html" %}
+
+{% block title %}Dashboard de reportes — Ferretería El Conejo{% endblock %}
+
+{% block content %}
+
+<!-- Encabezado -->
+<div class="page-header mb-3">
+    <div class="row align-items-center">
+        <div class="col">
+            <h1 class="page-title mb-1">
+                <i class="ti ti-chart-bar me-2 text-primary"></i>Dashboard de reportes
+            </h1>
+            <div class="text-secondary">
+                Inventario, movimientos y notas de entrega — solo lectura
+            </div>
+        </div>
+        <div class="col-auto text-secondary small" id="last-update"></div>
+    </div>
+</div>
+
+<!-- Mensajes globales (401 / 403 / errores de red) -->
+<div id="global-alert" class="alert d-none" role="alert"></div>
+
+<!-- Filtros -->
+<div class="card mb-3">
+    <div class="card-body py-3">
+        <form id="filters-form" class="row g-2 align-items-end" autocomplete="off">
+            <div class="col-6 col-md-2">
+                <label class="form-label mb-1" for="f-date-from">Desde</label>
+                <input type="date" id="f-date-from" class="form-control form-control-sm">
+            </div>
+            <div class="col-6 col-md-2">
+                <label class="form-label mb-1" for="f-date-to">Hasta</label>
+                <input type="date" id="f-date-to" class="form-control form-control-sm">
+            </div>
+            <div class="col-4 col-md-2">
+                <label class="form-label mb-1" for="f-days">Días sin movimiento</label>
+                <input type="number" id="f-days" class="form-control form-control-sm"
+                       min="1" step="1" value="30">
+            </div>
+            <div class="col-4 col-md-2">
+                <label class="form-label mb-1" for="f-multiplier">Multiplicador exceso</label>
+                <input type="number" id="f-multiplier" class="form-control form-control-sm"
+                       min="1" step="0.5" value="3">
+            </div>
+            <div class="col-4 col-md-1">
+                <label class="form-label mb-1" for="f-limit">Límite</label>
+                <input type="number" id="f-limit" class="form-control form-control-sm"
+                       min="1" step="1" value="10">
+            </div>
+            <div class="col-12 col-md-3 d-flex gap-2">
+                <button type="submit" id="btn-apply" class="btn btn-primary btn-sm flex-fill">
+                    <i class="ti ti-filter me-1"></i>Aplicar filtros
+                </button>
+                <button type="button" id="btn-clear" class="btn btn-outline-secondary btn-sm flex-fill">
+                    <i class="ti ti-filter-off me-1"></i>Limpiar
+                </button>
+            </div>
+        </form>
+        <div id="filters-error" class="text-danger small mt-2 d-none"></div>
+    </div>
+</div>
+
+<!-- Tarjetas KPI -->
+<div class="row row-cards g-2 mb-3" id="kpi-row">
+    <div class="col-6 col-sm-4 col-xl">
+        <div class="card kpi-card">
+            <div class="card-body">
+                <div class="kpi-icon bg-primary-lt"><i class="ti ti-box"></i></div>
+                <div class="kpi-value" id="kpi-total-products">—</div>
+                <div class="kpi-label">Total productos</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-sm-4 col-xl">
+        <div class="card kpi-card">
+            <div class="card-body">
+                <div class="kpi-icon bg-success-lt"><i class="ti ti-circle-check"></i></div>
+                <div class="kpi-value" id="kpi-active-products">—</div>
+                <div class="kpi-label">Productos activos</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-sm-4 col-xl">
+        <div class="card kpi-card">
+            <div class="card-body">
+                <div class="kpi-icon bg-secondary-lt"><i class="ti ti-circle-off"></i></div>
+                <div class="kpi-value" id="kpi-inactive-products">—</div>
+                <div class="kpi-label">Productos inactivos</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-sm-4 col-xl">
+        <div class="card kpi-card kpi-warning">
+            <div class="card-body">
+                <div class="kpi-icon bg-warning-lt"><i class="ti ti-alert-triangle"></i></div>
+                <div class="kpi-value" id="kpi-low-stock">—</div>
+                <div class="kpi-label">Bajo stock</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-sm-4 col-xl">
+        <div class="card kpi-card">
+            <div class="card-body">
+                <div class="kpi-icon bg-info-lt"><i class="ti ti-category"></i></div>
+                <div class="kpi-value" id="kpi-total-categories">—</div>
+                <div class="kpi-label">Categorías</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-sm-4 col-xl">
+        <div class="card kpi-card">
+            <div class="card-body">
+                <div class="kpi-icon bg-primary-lt"><i class="ti ti-arrows-exchange"></i></div>
+                <div class="kpi-value" id="kpi-total-movements">—</div>
+                <div class="kpi-label">Movimientos</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-sm-4 col-xl">
+        <div class="card kpi-card">
+            <div class="card-body">
+                <div class="kpi-icon bg-success-lt"><i class="ti ti-file-check"></i></div>
+                <div class="kpi-value" id="kpi-issued-notes">—</div>
+                <div class="kpi-label">Notas emitidas</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-sm-4 col-xl">
+        <div class="card kpi-card">
+            <div class="card-body">
+                <div class="kpi-icon bg-danger-lt"><i class="ti ti-file-x"></i></div>
+                <div class="kpi-value" id="kpi-cancelled-notes">—</div>
+                <div class="kpi-label">Notas canceladas</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-sm-4 col-xl">
+        <div class="card kpi-card kpi-gold">
+            <div class="card-body">
+                <div class="kpi-icon bg-yellow-lt"><i class="ti ti-cash"></i></div>
+                <div class="kpi-value" id="kpi-total-amount">—</div>
+                <div class="kpi-label">Monto total emitido</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-sm-4 col-xl">
+        <div class="card kpi-card kpi-gold">
+            <div class="card-body">
+                <div class="kpi-icon bg-yellow-lt"><i class="ti ti-calculator"></i></div>
+                <div class="kpi-value" id="kpi-avg-amount">—</div>
+                <div class="kpi-label">Promedio por nota</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Gráficos -->
+<div class="row row-cards g-3 mb-3">
+    <div class="col-12 col-lg-6">
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title"><i class="ti ti-trending-up me-2 text-primary"></i>Entradas vs salidas por día</h3>
+            </div>
+            <div class="card-body">
+                <div class="chart-holder"><canvas id="chart-entries-exits"></canvas></div>
+                <div id="chart-entries-exits-msg" class="widget-msg d-none"></div>
+            </div>
+        </div>
+    </div>
+    <div class="col-12 col-lg-6">
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title"><i class="ti ti-stack-2 me-2 text-primary"></i>Stock actual vs stock mínimo</h3>
+            </div>
+            <div class="card-body">
+                <div class="chart-holder"><canvas id="chart-stock-minimum"></canvas></div>
+                <div id="chart-stock-minimum-msg" class="widget-msg d-none"></div>
+            </div>
+        </div>
+    </div>
+    <div class="col-12 col-lg-6">
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title"><i class="ti ti-package-export me-2 text-primary"></i>Productos con más salidas</h3>
+            </div>
+            <div class="card-body">
+                <div class="chart-holder"><canvas id="chart-top-exits"></canvas></div>
+                <div id="chart-top-exits-msg" class="widget-msg d-none"></div>
+            </div>
+        </div>
+    </div>
+    <div class="col-12 col-lg-6">
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title"><i class="ti ti-calendar-stats me-2 text-primary"></i>Notas de entrega por período</h3>
+            </div>
+            <div class="card-body">
+                <div class="chart-holder"><canvas id="chart-notes-period"></canvas></div>
+                <div id="chart-notes-period-msg" class="widget-msg d-none"></div>
+            </div>
+        </div>
+    </div>
+    <div class="col-12 col-lg-6">
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title"><i class="ti ti-truck-delivery me-2 text-primary"></i>Productos más entregados</h3>
+            </div>
+            <div class="card-body">
+                <div class="chart-holder"><canvas id="chart-top-delivered"></canvas></div>
+                <div id="chart-top-delivered-msg" class="widget-msg d-none"></div>
+            </div>
+        </div>
+    </div>
+    <div class="col-12 col-lg-6">
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title"><i class="ti ti-users me-2 text-primary"></i>Notas de entrega por usuario</h3>
+            </div>
+            <div class="card-body">
+                <div class="chart-holder"><canvas id="chart-notes-user"></canvas></div>
+                <div id="chart-notes-user-msg" class="widget-msg d-none"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Tablas -->
+<div class="row row-cards g-3">
+    <div class="col-12 col-lg-6">
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title"><i class="ti ti-alert-triangle me-2 text-warning"></i>Productos bajo stock</h3>
+                <span class="card-actions badge bg-warning-lt" id="badge-low-stock"></span>
+            </div>
+            <div class="table-responsive">
+                <table class="table table-vcenter table-striped card-table">
+                    <thead>
+                        <tr>
+                            <th>Código</th>
+                            <th>Producto</th>
+                            <th>Categoría</th>
+                            <th class="text-end">Stock</th>
+                            <th class="text-end">Mínimo</th>
+                            <th>Estado</th>
+                        </tr>
+                    </thead>
+                    <tbody id="table-low-stock"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    <div class="col-12 col-lg-6">
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title"><i class="ti ti-zzz me-2 text-secondary"></i>Productos sin movimiento</h3>
+                <span class="card-actions badge bg-secondary-lt" id="badge-no-movement"></span>
+            </div>
+            <div class="table-responsive">
+                <table class="table table-vcenter table-striped card-table">
+                    <thead>
+                        <tr>
+                            <th>Código</th>
+                            <th>Producto</th>
+                            <th>Categoría</th>
+                            <th class="text-end">Stock</th>
+                            <th>Último movimiento</th>
+                            <th class="text-end">Días</th>
+                        </tr>
+                    </thead>
+                    <tbody id="table-no-movement"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    <div class="col-12 col-lg-6">
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title"><i class="ti ti-database-export me-2 text-info"></i>Productos con exceso de stock</h3>
+                <span class="card-actions badge bg-info-lt" id="badge-excess"></span>
+            </div>
+            <div class="table-responsive">
+                <table class="table table-vcenter table-striped card-table">
+                    <thead>
+                        <tr>
+                            <th>Código</th>
+                            <th>Producto</th>
+                            <th>Categoría</th>
+                            <th class="text-end">Stock</th>
+                            <th class="text-end">Mínimo</th>
+                            <th class="text-end">Exceso</th>
+                        </tr>
+                    </thead>
+                    <tbody id="table-excess"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    <div class="col-12 col-lg-6">
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title"><i class="ti ti-adjustments me-2 text-primary"></i>Ajustes de inventario</h3>
+                <span class="card-actions badge bg-primary-lt" id="badge-adjustments"></span>
+            </div>
+            <div class="table-responsive">
+                <table class="table table-vcenter table-striped card-table">
+                    <thead>
+                        <tr>
+                            <th>Fecha</th>
+                            <th>Producto</th>
+                            <th class="text-end">Anterior</th>
+                            <th class="text-end">Nuevo</th>
+                            <th>Motivo</th>
+                            <th>Usuario</th>
+                        </tr>
+                    </thead>
+                    <tbody id="table-adjustments"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+{% endblock %}

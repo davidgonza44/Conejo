@@ -2,6 +2,7 @@
 from app.models.user import User
 from app.models.auth_identity import AuthIdentity
 from app.models.passwordless_token import PasswordlessToken
+from app.models.password_reset_token import PasswordResetToken
 from app.models.category import Category
 from app.models.product import Product
 from app.models.stock_movement import StockMovement
@@ -12,6 +13,7 @@ __all__ = [
     "User",
     "AuthIdentity",
     "PasswordlessToken",
+    "PasswordResetToken",
     "Category",
     "Product",
     "StockMovement",

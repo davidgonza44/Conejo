@@ -20,6 +20,16 @@ auth_bp.add_url_rule(
     methods=["POST"],
 )
 auth_bp.add_url_rule(
+    "/password-reset/request",
+    view_func=auth_controller.password_reset_request,
+    methods=["POST"],
+)
+auth_bp.add_url_rule(
+    "/password-reset/confirm",
+    view_func=auth_controller.password_reset_confirm,
+    methods=["POST"],
+)
+auth_bp.add_url_rule(
     "/google/login", view_func=auth_controller.google_login, methods=["GET"]
 )
 auth_bp.add_url_rule(

@@ -22,6 +22,17 @@ def login():
     return render_template("login.html")
 
 
+@pages_bp.get("/forgot-password")
+def forgot_password():
+    return render_template("forgot_password.html")
+
+
+@pages_bp.get("/reset-password")
+def reset_password():
+    # El token llega en el query string (?token=...) y lo lee el JS.
+    return render_template("reset_password.html")
+
+
 @pages_bp.get("/access-denied")
 def access_denied():
     return render_template("access_denied.html")
@@ -32,4 +43,4 @@ def access_denied():
 def dashboard():
     if current_user.role not in _DASHBOARD_ROLES:
         return redirect(url_for("pages.access_denied"))
-    return render_template("dashboard_placeholder.html")
+    return render_template("dashboard.html")

@@ -1,0 +1,96 @@
+/* Ajustes visuales del dashboard sobre Tabler.
+   Paleta sobria: azul oscuro, gris, blanco y acento dorado suave. */
+
+:root {
+    --dash-dark-blue: #1d3d5f;
+    --dash-gold: #d9a521;
+}
+
+/* Sidebar en azul oscuro sobrio (sobre el tema dark de Tabler). */
+.navbar-vertical.navbar-expand-lg {
+    background-color: var(--dash-dark-blue) !important;
+}
+
+.navbar-vertical .navbar-brand {
+    font-weight: 600;
+    letter-spacing: 0.02em;
+}
+
+.navbar-vertical .nav-link.disabled {
+    opacity: 0.55;
+}
+
+/* Tarjetas KPI compactas y consistentes. */
+.kpi-card .card-body {
+    padding: 0.9rem 1rem;
+}
+
+.kpi-icon {
+    width: 2.2rem;
+    height: 2.2rem;
+    border-radius: 0.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.1rem;
+    margin-bottom: 0.5rem;
+}
+
+.kpi-value {
+    font-size: 1.35rem;
+    font-weight: 700;
+    line-height: 1.2;
+    color: var(--dash-dark-blue);
+}
+
+.kpi-label {
+    font-size: 0.78rem;
+    color: var(--tblr-secondary, #6c757d);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.kpi-card.kpi-warning .kpi-value {
+    color: #b26a00;
+}
+
+.kpi-card.kpi-gold .kpi-value {
+    color: var(--dash-gold);
+}
+
+/* Altura fija de los gráficos para un grid ordenado y responsive. */
+.chart-holder {
+    position: relative;
+    height: 300px;
+}
+
+/* Mensaje de "Sin datos" o error dentro de la tarjeta del gráfico. */
+.widget-msg {
+    height: 300px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--tblr-secondary, #6c757d);
+    font-size: 0.9rem;
+    text-align: center;
+}
+
+/* Tablas: evitar celdas gigantes con nombres largos. */
+.card-table td {
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+@media (max-width: 575.98px) {
+    .kpi-value {
+        font-size: 1.1rem;
+    }
+
+    .chart-holder,
+    .widget-msg {
+        height: 240px;
+    }
+}

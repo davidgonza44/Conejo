@@ -1,0 +1,10 @@
+{
+  "plugins": {
+    "interface-design/interface-design": {
+      "enabled": true
+    },
+    "parallel": {
+      "enabled": true
+    }
+  }
+}
