@@ -9,6 +9,8 @@ from flask_login import current_user, login_required
 from app.models.user import ROLE_ADMIN, ROLE_INVENTARIO
 from app.utils.permissions import (
     CATEGORIES_WRITE,
+    INVENTORY_MOVE,
+    INVENTORY_READ,
     PRODUCTS_WRITE,
     role_has_permission,
 )
@@ -62,6 +64,17 @@ def categories():
 @login_required
 def profile():
     return render_template("profile.html")
+
+
+@pages_bp.get("/inventory")
+@login_required
+def inventory():
+    if not role_has_permission(current_user.role, INVENTORY_READ):
+        return redirect(url_for("pages.access_denied"))
+    return render_template(
+        "inventory.html",
+        can_move=role_has_permission(current_user.role, INVENTORY_MOVE),
+    )
 
 
 @pages_bp.get("/access-denied")
