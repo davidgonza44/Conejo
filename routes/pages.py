@@ -58,6 +58,12 @@ def categories():
     )
 
 
+@pages_bp.get("/profile")
+@login_required
+def profile():
+    return render_template("profile.html")
+
+
 @pages_bp.get("/access-denied")
 def access_denied():
     return render_template("access_denied.html")

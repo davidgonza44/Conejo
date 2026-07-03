@@ -40,6 +40,20 @@ def me():
     return jsonify(current_user.to_dict())
 
 
+def upload_profile_photo():
+    from app.services import profile_photo_service
+
+    user = profile_photo_service.set_photo(current_user, request.files.get("image"))
+    return jsonify(profile_photo_service.photo_response(user))
+
+
+def delete_profile_photo():
+    from app.services import profile_photo_service
+
+    user = profile_photo_service.remove_photo(current_user)
+    return jsonify(profile_photo_service.remove_response(user))
+
+
 def passwordless_request():
     response = passwordless_service.request_token(_json_body())
     return jsonify(response)

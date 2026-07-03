@@ -19,8 +19,8 @@ def create_app(config_class: type = Config) -> Flask:
 
     @login_manager.unauthorized_handler
     def handle_unauthorized():
-        # Las rutas /api siguen siendo JSON puro; las páginas web redirigen al login.
-        if request.path.startswith("/api/"):
+        # API y archivos media: JSON 401. Páginas web: redirigen al login.
+        if request.path.startswith("/api/") or request.path.startswith("/media/"):
             return jsonify({"error": "Autenticación requerida."}), 401
         return redirect(url_for("pages.login"))
 

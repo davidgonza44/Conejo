@@ -24,6 +24,7 @@ class User(UserMixin, db.Model):
     role = db.Column(db.String(20), nullable=False, default=ROLE_VENDEDOR)
     is_active = db.Column(db.Boolean, nullable=False, default=True)
     email_verified = db.Column(db.Boolean, nullable=False, default=False)
+    profile_photo_filename = db.Column(db.String(255), nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     updated_at = db.Column(
         db.DateTime,
@@ -54,6 +55,12 @@ class User(UserMixin, db.Model):
     def is_admin(self) -> bool:
         return self.role == ROLE_ADMIN
 
+    @property
+    def profile_photo_url(self) -> str | None:
+        if self.profile_photo_filename:
+            return f"/media/users/{self.profile_photo_filename}"
+        return None
+
     def to_dict(self) -> dict:
         """Representación pública del usuario. Nunca incluye password_hash."""
         return {
@@ -64,6 +71,7 @@ class User(UserMixin, db.Model):
             "role": self.role,
             "is_active": self.is_active,
             "email_verified": self.email_verified,
+            "profile_photo_url": self.profile_photo_url,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }

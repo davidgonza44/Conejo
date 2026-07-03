@@ -78,14 +78,22 @@
                     <h2 class="navbar-brand d-lg-none mb-0">Ferretería El Conejo</h2>
                     <div class="navbar-nav flex-row order-md-last ms-auto align-items-center">
                         <div class="d-none d-sm-flex flex-column text-end me-2">
-                            <span class="fw-bold lh-sm">{{ current_user.name }}</span>
+                            <a href="/profile" class="text-reset text-decoration-none">
+                                <span class="fw-bold lh-sm">{{ current_user.name }}</span>
+                            </a>
                             <span class="lh-sm">
                                 <span class="badge bg-blue-lt">{{ current_user.role | capitalize }}</span>
                             </span>
                         </div>
-                        <span class="avatar avatar-sm bg-primary-lt me-3">
-                            {{ (current_user.name or "U")[:1] | upper }}
-                        </span>
+                        <a href="/profile" class="avatar avatar-sm me-3" title="Mi perfil">
+                            {% if current_user.profile_photo_url %}
+                            <img src="{{ current_user.profile_photo_url }}" alt="Foto de perfil">
+                            {% else %}
+                            <span class="avatar avatar-sm bg-primary-lt">
+                                {{ (current_user.name or "U")[:1] | upper }}
+                            </span>
+                            {% endif %}
+                        </a>
                         <button type="button" class="btn btn-outline-danger btn-sm" onclick="logout()">
                             <i class="ti ti-logout me-1"></i>Cerrar sesión
                         </button>
@@ -108,6 +116,7 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/@tabler/core@1/dist/js/tabler.min.js"></script>
+    <script>window.bootstrap = window.bootstrap || (window.tabler && window.tabler.bootstrap);</script>
     <script src="{{ url_for('static', filename='js/auth.js') }}"></script>
     {% block scripts %}{% endblock %}
 </body>
