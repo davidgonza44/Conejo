@@ -40,3 +40,13 @@ products_bp.add_url_rule(
     view_func=_can_write(product_controller.deactivate_product),
     methods=["DELETE"],
 )
+products_bp.add_url_rule(
+    "/products/<int:product_id>/image",
+    view_func=_can_write(product_controller.upload_product_image),
+    methods=["POST"],
+)
+products_bp.add_url_rule(
+    "/products/<int:product_id>/image",
+    view_func=_can_write(product_controller.delete_product_image),
+    methods=["DELETE"],
+)

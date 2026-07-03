@@ -28,17 +28,22 @@
                 </div>
                 <div class="collapse navbar-collapse" id="sidebar-menu">
                     <ul class="navbar-nav pt-lg-3">
-                        <li class="nav-item active">
+                        <li class="nav-item {{ 'active' if active_page == 'dashboard' }}">
                             <a class="nav-link" href="/dashboard">
                                 <span class="nav-link-icon"><i class="ti ti-dashboard"></i></span>
                                 <span class="nav-link-title">Dashboard</span>
                             </a>
                         </li>
-                        <li class="nav-item">
-                            <a class="nav-link disabled" href="#" tabindex="-1" aria-disabled="true">
+                        <li class="nav-item {{ 'active' if active_page == 'products' }}">
+                            <a class="nav-link" href="/products">
                                 <span class="nav-link-icon"><i class="ti ti-box"></i></span>
                                 <span class="nav-link-title">Productos</span>
-                                <span class="badge bg-secondary-lt ms-auto">Pronto</span>
+                            </a>
+                        </li>
+                        <li class="nav-item {{ 'active' if active_page == 'categories' }}">
+                            <a class="nav-link" href="/categories">
+                                <span class="nav-link-icon"><i class="ti ti-category"></i></span>
+                                <span class="nav-link-title">Categorías</span>
                             </a>
                         </li>
                         <li class="nav-item">

@@ -1,7 +1,7 @@
 """Controlador de productos: traduce HTTP <-> servicio."""
 from flask import jsonify, request
 
-from app.services import product_service
+from app.services import product_image_service, product_service
 from app.services.exceptions import ValidationError
 
 
@@ -49,6 +49,28 @@ def deactivate_product(product_id: int):
     return jsonify(
         {
             "message": f"Producto '{product.name}' desactivado correctamente.",
+            "product": product.to_dict(),
+        }
+    )
+
+
+def upload_product_image(product_id: int):
+    """Sube/reemplaza la imagen (multipart/form-data, campo 'image')."""
+    product = product_image_service.set_image(product_id, request.files.get("image"))
+    return jsonify(
+        {
+            "message": "Imagen del producto actualizada correctamente.",
+            "image_url": product.image_url,
+            "product": product.to_dict(),
+        }
+    )
+
+
+def delete_product_image(product_id: int):
+    product = product_image_service.remove_image(product_id)
+    return jsonify(
+        {
+            "message": "Imagen del producto eliminada correctamente.",
             "product": product.to_dict(),
         }
     )
