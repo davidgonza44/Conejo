@@ -63,6 +63,13 @@ def categories():
     )
 
 
+@pages_bp.get("/catalog")
+@login_required
+def catalog():
+    """Catálogo visual de solo consulta para los roles autenticados."""
+    return render_template("catalog.html")
+
+
 @pages_bp.get("/profile")
 @login_required
 def profile():
