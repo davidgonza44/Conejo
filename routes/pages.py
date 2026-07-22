@@ -9,6 +9,9 @@ from flask_login import current_user, login_required
 from app.models.user import ROLE_ADMIN, ROLE_INVENTARIO
 from app.utils.permissions import (
     CATEGORIES_WRITE,
+    DELIVERY_NOTES_CANCEL,
+    DELIVERY_NOTES_CREATE,
+    DELIVERY_NOTES_READ,
     INVENTORY_MOVE,
     INVENTORY_READ,
     PRODUCTS_WRITE,
@@ -74,6 +77,18 @@ def inventory():
     return render_template(
         "inventory.html",
         can_move=role_has_permission(current_user.role, INVENTORY_MOVE),
+    )
+
+
+@pages_bp.get("/delivery-notes")
+@login_required
+def delivery_notes():
+    if not role_has_permission(current_user.role, DELIVERY_NOTES_READ):
+        return redirect(url_for("pages.access_denied"))
+    return render_template(
+        "delivery_notes.html",
+        can_create=role_has_permission(current_user.role, DELIVERY_NOTES_CREATE),
+        can_cancel=role_has_permission(current_user.role, DELIVERY_NOTES_CANCEL),
     )
 
 
