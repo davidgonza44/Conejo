@@ -1,0 +1,195 @@
+{% extends "base_app.html" %}
+{% set active_page = "chatbot" %}
+
+{% block title %}Asistente de inventario — Ferretería El Conejo{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/chatbot.css') }}">
+{% endblock %}
+
+{% block content %}
+<main class="chatbot-page" id="chatbot-page"
+      data-can-view-stock="{{ can_view_stock | tojson }}"
+      aria-labelledby="chatbot-title">
+    <header class="chatbot-header mb-4">
+        <div class="chatbot-header__content">
+            <div class="chatbot-header__icon" aria-hidden="true">
+                <i class="ti ti-message-chatbot"></i>
+            </div>
+            <div>
+                <h1 class="page-title mb-1" id="chatbot-title">Asistente de inventario</h1>
+                <p class="chatbot-subtitle mb-0">
+                    Consulta información interna de productos en modo de solo lectura.
+                </p>
+            </div>
+        </div>
+        <span class="chatbot-readonly-badge">
+            <i class="ti ti-lock" aria-hidden="true"></i>
+            Solo consulta
+        </span>
+    </header>
+
+    <div class="chatbot-layout">
+        <aside class="card chatbot-guide" aria-labelledby="chatbot-guide-title">
+            <div class="card-body">
+                <div class="chatbot-guide__heading">
+                    <span class="chatbot-guide__icon" aria-hidden="true">
+                        <i class="ti ti-bolt"></i>
+                    </span>
+                    <div>
+                        <h2 id="chatbot-guide-title">Consultas rápidas</h2>
+                        <p>Elige una opción para empezar.</p>
+                    </div>
+                </div>
+
+                <div class="chatbot-quick-actions" aria-label="Sugerencias de consulta">
+                    <button type="button" class="chatbot-quick-action"
+                            data-chat-prompt="Buscar producto" data-chat-mode="compose"
+                            aria-controls="chatbot-input">
+                        <i class="ti ti-search" aria-hidden="true"></i>
+                        <span>Buscar producto</span>
+                        <i class="ti ti-chevron-right chatbot-quick-action__arrow"
+                           aria-hidden="true"></i>
+                    </button>
+                    <button type="button" class="chatbot-quick-action"
+                            data-chat-prompt="Precio de" data-chat-mode="compose"
+                            aria-controls="chatbot-input">
+                        <i class="ti ti-currency-dollar" aria-hidden="true"></i>
+                        <span>Consultar precio</span>
+                        <i class="ti ti-chevron-right chatbot-quick-action__arrow"
+                           aria-hidden="true"></i>
+                    </button>
+                    <button type="button" class="chatbot-quick-action"
+                            data-chat-prompt="Productos agotados" data-chat-mode="send"
+                            aria-controls="chatbot-log">
+                        <i class="ti ti-package-off" aria-hidden="true"></i>
+                        <span>Productos agotados</span>
+                        <i class="ti ti-chevron-right chatbot-quick-action__arrow"
+                           aria-hidden="true"></i>
+                    </button>
+                    {% if can_view_stock %}
+                    <button type="button" class="chatbot-quick-action"
+                            data-chat-prompt="Stock exacto de" data-chat-mode="compose"
+                            aria-controls="chatbot-input">
+                        <i class="ti ti-box" aria-hidden="true"></i>
+                        <span>Stock exacto</span>
+                        <i class="ti ti-chevron-right chatbot-quick-action__arrow"
+                           aria-hidden="true"></i>
+                    </button>
+                    <button type="button" class="chatbot-quick-action"
+                            data-chat-prompt="Productos bajo stock" data-chat-mode="send"
+                            aria-controls="chatbot-log">
+                        <i class="ti ti-alert-triangle" aria-hidden="true"></i>
+                        <span>Productos bajo stock</span>
+                        <i class="ti ti-chevron-right chatbot-quick-action__arrow"
+                           aria-hidden="true"></i>
+                    </button>
+                    {% endif %}
+                </div>
+
+                <div class="chatbot-guide__note">
+                    <i class="ti ti-shield-check" aria-hidden="true"></i>
+                    <p>
+                        Este asistente no crea ni modifica productos, movimientos o documentos.
+                        {% if not can_view_stock %}
+                        La disponibilidad se informa sin mostrar cantidades exactas.
+                        {% endif %}
+                    </p>
+                </div>
+            </div>
+        </aside>
+
+        <section class="card chatbot-conversation" aria-labelledby="chatbot-conversation-title">
+            <div class="card-header chatbot-conversation__header">
+                <div>
+                    <h2 class="card-title" id="chatbot-conversation-title">Conversación</h2>
+                    <p class="mb-0">Pregunta por productos activos del inventario.</p>
+                </div>
+                <span class="chatbot-mode-badge">
+                    <i class="ti ti-lock" aria-hidden="true"></i>
+                    Solo consulta
+                </span>
+            </div>
+
+            <div class="chatbot-log" id="chatbot-log" role="log" aria-live="polite"
+                 aria-relevant="additions text" aria-label="Conversación con el asistente"
+                 tabindex="0">
+                <article class="chatbot-message chatbot-message--assistant"
+                         aria-label="Mensaje del asistente">
+                    <div class="chatbot-message__avatar" aria-hidden="true">
+                        <i class="ti ti-message-chatbot"></i>
+                    </div>
+                    <div class="chatbot-message__content">
+                        <span class="chatbot-message__author">Asistente</span>
+                        <div class="chatbot-message__bubble">
+                            <p>Hola, soy el asistente interno de inventario.</p>
+                            <p>
+                                Puedo buscar productos activos por nombre o código, consultar
+                                precios de venta, categorías, disponibilidad y productos agotados.
+                                {% if can_view_stock %}
+                                También puedo mostrar el stock actual y mínimo, y los productos
+                                bajo stock.
+                                {% endif %}
+                            </p>
+                            <p class="chatbot-message__hint">
+                                Escribe una pregunta o usa una consulta rápida.
+                            </p>
+                        </div>
+                    </div>
+                </article>
+
+                <div class="chatbot-typing" id="chatbot-typing" hidden>
+                    <div class="chatbot-message__avatar" aria-hidden="true">
+                        <i class="ti ti-message-chatbot"></i>
+                    </div>
+                    <div class="chatbot-typing__bubble">
+                        <span class="visually-hidden">El asistente está escribiendo.</span>
+                        <span aria-hidden="true"></span>
+                        <span aria-hidden="true"></span>
+                        <span aria-hidden="true"></span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="chatbot-composer">
+                <form id="chatbot-form" autocomplete="off" novalidate>
+                    <div class="chatbot-input-error" id="chatbot-input-error" hidden></div>
+                    <label class="form-label" for="chatbot-input">Escribe tu consulta</label>
+                    <textarea class="form-control" id="chatbot-input" rows="2" maxlength="500"
+                              placeholder="Ej.: Dame información del producto con código HER-001"
+                              aria-describedby="chatbot-input-help chatbot-counter"
+                              aria-errormessage="chatbot-input-error"
+                              spellcheck="true"></textarea>
+                    <div class="chatbot-composer__footer">
+                        <span class="chatbot-input-help" id="chatbot-input-help">
+                            Enter para enviar · Shift+Enter para una nueva línea
+                        </span>
+                        <output class="chatbot-counter" id="chatbot-counter"
+                                for="chatbot-input">0/500</output>
+                        <span class="visually-hidden" id="chatbot-counter-alert"
+                              aria-live="polite" aria-atomic="true"></span>
+                        <button type="submit" class="btn chatbot-send-button"
+                                id="chatbot-send">
+                            <span id="chatbot-send-label">
+                                <i class="ti ti-send me-1" aria-hidden="true"></i>Enviar
+                            </span>
+                            <span id="chatbot-send-loading" hidden>
+                                <span class="spinner-border spinner-border-sm me-1"
+                                      aria-hidden="true"></span>Enviando
+                            </span>
+                        </button>
+                    </div>
+                </form>
+                <p class="chatbot-memory-note mb-0">
+                    <i class="ti ti-clock-hour-4" aria-hidden="true"></i>
+                    La conversación solo se conserva mientras esta página permanece abierta.
+                </p>
+            </div>
+        </section>
+    </div>
+</main>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/chatbot.js') }}"></script>
+{% endblock %}

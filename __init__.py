@@ -36,6 +36,7 @@ def create_app(config_class: type = Config) -> Flask:
     from app.routes.reports import reports_bp
     from app.routes.pages import pages_bp
     from app.routes.media import media_bp
+    from app.routes.chatbot import chatbot_bp
 
     app.register_blueprint(main_bp)
     app.register_blueprint(auth_bp)
@@ -47,6 +48,7 @@ def create_app(config_class: type = Config) -> Flask:
     app.register_blueprint(reports_bp)
     app.register_blueprint(pages_bp)
     app.register_blueprint(media_bp)
+    app.register_blueprint(chatbot_bp)
 
     from app.services.exceptions import ApiError
 

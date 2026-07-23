@@ -14,6 +14,7 @@ from app.utils.permissions import (
     DELIVERY_NOTES_READ,
     INVENTORY_MOVE,
     INVENTORY_READ,
+    PRODUCTS_READ,
     PRODUCTS_WRITE,
     role_has_permission,
 )
@@ -68,6 +69,18 @@ def categories():
 def catalog():
     """Catálogo visual de solo consulta para los roles autenticados."""
     return render_template("catalog.html")
+
+
+@pages_bp.get("/chatbot")
+@login_required
+def chatbot():
+    """Asistente interno de consulta para roles con lectura de productos."""
+    if not role_has_permission(current_user.role, PRODUCTS_READ):
+        return redirect(url_for("pages.access_denied"))
+    return render_template(
+        "chatbot.html",
+        can_view_stock=current_user.role in _DASHBOARD_ROLES,
+    )
 
 
 @pages_bp.get("/profile")
