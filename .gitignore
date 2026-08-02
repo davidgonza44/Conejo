@@ -1,0 +1,40 @@
+# Entorno virtual
+venv/
+env/
+
+# Variables de entorno con credenciales
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# IDE
+.vscode/
+.idea/
+
+# Sistema operativo
+Thumbs.db
+.DS_Store
+
+# Archivos subidos por usuarios (imágenes de productos y fotos de perfil)
+uploads/
+
+# Datos privados y temporales del importador
+/instance/historical_imports/
+/private_imports/
+/instance/import_tmp/
+/instance/import_staging/
+
+# Reportes generados
+/reports/generated/
+
+# Archivos temporales de pruebas
+/tests/tmp/
+/tests/.tmp/
