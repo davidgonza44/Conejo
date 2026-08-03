@@ -8,9 +8,6 @@ from app.extensions import db, login_manager, oauth
 def create_app(config_class: type = Config) -> Flask:
     app = Flask(__name__)
     app.config.from_object(config_class)
-    # Límite global de multipart requerido por la importación histórica.
-    # Los archivos históricos tienen además un límite interno de 10 MiB.
-    app.config["MAX_CONTENT_LENGTH"] = 12 * 1024 * 1024
 
     db.init_app(app)
     login_manager.init_app(app)

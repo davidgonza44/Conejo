@@ -8,6 +8,7 @@
     const CAN_CONFIRM = config.canConfirm === true;
     const CAN_REVERT = config.canRevert === true;
     const CAN_EXPORT = config.canExport === true;
+    const CSRF_TOKEN = typeof config.csrfToken === "string" ? config.csrfToken : "";
     const MAX_FILE_BYTES = 10 * 1024 * 1024;
     const PAGE_SIZE = 25;
 
@@ -82,6 +83,12 @@
         "weak_possible_duplicate",
     ]);
 
+    const RELATIONSHIP_REVIEW_CODES = new Set([
+        "related_record_missing",
+        "related_record_ambiguous",
+        "related_record_invalid",
+    ]);
+
     const state = {
         importsPage: 1,
         importsPagination: null,
@@ -104,6 +111,9 @@
         reviewIssueCodes: new Set(),
         allowedReviewProductIds: new Set(),
         allowedReviewRelatedIds: new Set(),
+        relationshipCandidatesPage: 1,
+        relationshipCandidatesPagination: null,
+        relationshipRequestSerial: 0,
     };
 
     const headerAllowlists = new Map();
@@ -341,7 +351,7 @@
     }
 
     async function apiRequest(path, options = {}) {
-        const method = options.method || "GET";
+        const method = String(options.method || "GET").toUpperCase();
         const url = new URL(path, window.location.origin);
         const params = options.params || {};
         Object.entries(params).forEach(([key, value]) => {
@@ -357,6 +367,13 @@
                 Accept: options.accept || "application/json",
             },
         };
+
+        if (!["GET", "HEAD", "OPTIONS"].includes(method)) {
+            if (!CSRF_TOKEN) {
+                throw new HttpError(400, "No hay un token CSRF disponible para esta operación.");
+            }
+            requestOptions.headers["X-CSRFToken"] = CSRF_TOKEN;
+        }
 
         if (options.json !== undefined) {
             requestOptions.headers["Content-Type"] = "application/json";
@@ -458,6 +475,7 @@
             ["Válidas", counts && counts.valid],
             ["Errores", counts && counts.errors],
             ["Pendientes", counts && counts.reviews_pending],
+            ["Duplicados", counts && counts.possible_duplicates],
         ];
         values.forEach(([label, value]) => {
             const item = createElement("span");
@@ -689,6 +707,15 @@
             ? metadata.mapping
             : null;
         let headers = headerAllowlists.get(item.id) || [];
+        const persistedHeaders = metadata
+            && metadata.metadata
+            && Array.isArray(metadata.metadata.headers)
+            ? metadata.metadata.headers
+            : [];
+        if (headers.length === 0 && persistedHeaders.length > 0) {
+            headers = uniqueHeaders(persistedHeaders);
+            headerAllowlists.set(item.id, headers);
+        }
         if (headers.length === 0 && mapping) {
             headers = uniqueHeaders(Object.values(mapping));
             headerAllowlists.set(item.id, headers);
@@ -779,6 +806,7 @@
         setText("detail-count-warnings", safeCount(counts.warnings));
         setText("detail-count-errors", safeCount(counts.errors));
         setText("detail-count-pending", safeCount(counts.reviews_pending));
+        setText("detail-count-duplicates", safeCount(counts.possible_duplicates));
         renderDryRunSummary(item.dry_run_summary);
         renderMapping(item);
         renderDetailActions(item);
@@ -801,6 +829,7 @@
         setText("detail-count-warnings", "—");
         setText("detail-count-errors", "—");
         setText("detail-count-pending", "—");
+        setText("detail-count-duplicates", "—");
         renderDryRunSummary(null);
         byId("mapping-alert").className = "alert alert-info mb-0";
         byId("mapping-alert").textContent = "Cargando mapping del lote…";
@@ -849,6 +878,8 @@
         byId("import-detail-view").classList.add("d-none");
         byId("imports-view").classList.remove("d-none");
         state.currentImport = null;
+        state.reviewRecord = null;
+        state.relationshipRequestSerial += 1;
         recordCache.clear();
         issueCodesByRecord.clear();
         window.scrollTo({ top: 0, behavior: "auto" });
@@ -1165,6 +1196,8 @@
         if (!isDuplicates) {
             params.severity = byId("errors-severity").value;
             params.resolution_status = byId("errors-resolution").value;
+        } else {
+            params.category = "duplicate";
         }
         try {
             const data = await apiRequest(
@@ -1350,6 +1383,7 @@
             ["Filas válidas", summary ? safeCount(summary.valid_rows) : safeCount(counts.valid)],
             ["Errores", summary ? safeCount(summary.errors) : safeCount(counts.errors)],
             ["Revisiones pendientes", summary ? safeCount(summary.unresolved_reviews) : safeCount(counts.reviews_pending)],
+            ["Posibles duplicados", safeCount(counts.possible_duplicates)],
         ];
         const nodes = values.map(([label, value]) => {
             const item = createElement("div");
@@ -1497,38 +1531,6 @@
             : {};
     }
 
-    function relatedCandidatesFor(record) {
-        const candidates = [];
-        const seen = new Set();
-        const metadata = record.admin_metadata || {};
-        recordCache.forEach((candidate) => {
-            if (!candidate || Number(candidate.id) === Number(record.id)) {
-                return;
-            }
-            const candidateMetadata = candidate.admin_metadata || {};
-            const validType = candidate.record_type === "sale" || candidate.record_type === "correction";
-            const validStatus = candidate.effective_status === "issued" || candidate.effective_status === "active";
-            const sameDocument = metadata.document_number_normalized
-                && metadata.document_number_normalized === candidateMetadata.document_number_normalized;
-            const sameProduct = record.product_code_normalized === candidate.product_code_normalized;
-            const earlier = Number(candidate.source_row_number) < Number(record.source_row_number);
-            if (validType && validStatus && sameDocument && sameProduct && earlier) {
-                seen.add(Number(candidate.id));
-                candidates.push(candidate);
-            }
-        });
-        const currentRelatedId = Number(record.related_record_id);
-        if (Number.isInteger(currentRelatedId) && !seen.has(currentRelatedId)) {
-            const cached = recordCache.get(currentRelatedId);
-            candidates.push(cached || {
-                id: currentRelatedId,
-                source_row_number: "externa",
-                record_type: "venta/corrección",
-            });
-        }
-        return candidates;
-    }
-
     function setReviewCheckVisibility(wrapId, inputId, visible, checked) {
         const wrap = byId(wrapId);
         const input = byId(inputId);
@@ -1537,6 +1539,182 @@
         }
         wrap.classList.toggle("d-none", !visible);
         input.checked = visible && Boolean(checked);
+    }
+
+    function hasRelationshipReviewIssue() {
+        return Array.from(state.reviewIssueCodes).some((code) => (
+            RELATIONSHIP_REVIEW_CODES.has(code)
+        ));
+    }
+
+    function updateRelationshipCandidatePagination(pagination) {
+        const page = Number(pagination && pagination.page) || 1;
+        const pages = Number(pagination && pagination.pages) || 0;
+        const total = Number(pagination && pagination.total) || 0;
+        state.relationshipCandidatesPage = page;
+        state.relationshipCandidatesPagination = pagination || null;
+        byId("review-related-page-label").textContent = pages > 0
+            ? `Página ${page} de ${pages} · ${total} candidatos`
+            : "Sin candidatos";
+        byId("review-related-prev-page").disabled = page <= 1;
+        byId("review-related-next-page").disabled = pages === 0 || page >= pages;
+    }
+
+    function renderRelationshipCandidates(record, data) {
+        const items = Array.isArray(data && data.items) ? data.items : [];
+        const pagination = data && data.pagination ? data.pagination : null;
+        const relationGroup = byId("review-relationship-group");
+        const relationSelect = byId("review-related-record-id");
+        const relationOptions = [];
+        const blankRelation = createElement("option", "", "No cambiar la relación");
+        blankRelation.value = "";
+        relationOptions.push(blankRelation);
+        state.allowedReviewRelatedIds = new Set();
+
+        items.forEach((candidate) => {
+            const id = Number(candidate && candidate.id);
+            if (!Number.isInteger(id) || id < 1 || state.allowedReviewRelatedIds.has(id)) {
+                return;
+            }
+            state.allowedReviewRelatedIds.add(id);
+            const parts = [
+                `Registro #${id}`,
+                `fila ${safeText(candidate.source_row_number, "externa")}`,
+                safeText(candidate.record_type, "venta/corrección"),
+            ];
+            if (candidate.event_date) {
+                parts.push(String(candidate.event_date));
+            }
+            if (candidate.quantity !== null && candidate.quantity !== undefined) {
+                parts.push(`cantidad ${formatDecimal(candidate.quantity)}`);
+            }
+            const option = createElement("option", "", parts.join(" · "));
+            option.value = String(id);
+            relationOptions.push(option);
+        });
+
+        const currentRelatedId = record.related_record_id === null
+            || record.related_record_id === undefined
+            || record.related_record_id === ""
+            ? null
+            : Number(record.related_record_id);
+        if (
+            Number.isInteger(currentRelatedId)
+            && currentRelatedId > 0
+            && !state.allowedReviewRelatedIds.has(currentRelatedId)
+        ) {
+            state.allowedReviewRelatedIds.add(currentRelatedId);
+            const current = createElement(
+                "option",
+                "",
+                `Relación vigente entregada por la API #${currentRelatedId}`,
+            );
+            current.value = String(currentRelatedId);
+            relationOptions.push(current);
+        }
+
+        relationSelect.replaceChildren(...relationOptions);
+        relationSelect.disabled = state.allowedReviewRelatedIds.size === 0;
+        updateRelationshipCandidatePagination(pagination);
+
+        const total = Number(pagination && pagination.total) || 0;
+        const showRelationship = record.record_type !== "sale"
+            && (
+                total > 0
+                || (Number.isInteger(currentRelatedId) && currentRelatedId > 0)
+                || hasRelationshipReviewIssue()
+            );
+        relationGroup.classList.toggle("d-none", !showRelationship);
+        byId("review-related-hint").textContent = total > 0
+            ? "Candidatos validados por el servidor; la selección se vuelve a comprobar al guardar."
+            : "El servidor no encontró candidatos válidos para esta relación.";
+
+        const flags = getRecordFlags(record);
+        setReviewCheckVisibility(
+            "review-relationship-wrap",
+            "review-relationship",
+            showRelationship && state.allowedReviewRelatedIds.size > 0,
+            flags.relationship,
+        );
+    }
+
+    async function loadRelationshipCandidates(record, page = 1) {
+        if (
+            !CAN_REVIEW
+            || !state.currentImport
+            || !record
+            || record.record_type === "sale"
+        ) {
+            return;
+        }
+        const importId = String(state.currentImport.id);
+        const recordId = Number(record.id);
+        const requestSerial = ++state.relationshipRequestSerial;
+        const relationGroup = byId("review-relationship-group");
+        const relationSelect = byId("review-related-record-id");
+        const loadingOption = createElement("option", "", "Cargando candidatos validados…");
+        loadingOption.value = "";
+        relationSelect.replaceChildren(loadingOption);
+        relationSelect.disabled = true;
+        relationGroup.classList.remove("d-none");
+        byId("review-related-hint").textContent = "Consultando candidatos válidos en el servidor…";
+        byId("review-related-page-label").textContent = "Cargando…";
+        byId("review-related-prev-page").disabled = true;
+        byId("review-related-next-page").disabled = true;
+        setReviewCheckVisibility(
+            "review-relationship-wrap",
+            "review-relationship",
+            false,
+            false,
+        );
+
+        try {
+            const data = await apiRequest(
+                `${API_BASE}/${encodeURIComponent(importId)}/records/${encodeURIComponent(recordId)}/relationship-candidates`,
+                { params: { page, per_page: PAGE_SIZE } },
+            );
+            if (
+                requestSerial !== state.relationshipRequestSerial
+                || !state.currentImport
+                || String(state.currentImport.id) !== importId
+                || !state.reviewRecord
+                || Number(state.reviewRecord.id) !== recordId
+            ) {
+                return;
+            }
+            renderRelationshipCandidates(record, data);
+        } catch (error) {
+            if (requestSerial !== state.relationshipRequestSerial) {
+                return;
+            }
+            state.allowedReviewRelatedIds = new Set();
+            updateRelationshipCandidatePagination(null);
+            const unavailable = createElement(
+                "option",
+                "",
+                "No se pudieron cargar los candidatos",
+            );
+            unavailable.value = "";
+            relationSelect.replaceChildren(unavailable);
+            byId("review-related-hint").textContent = friendlyError(error);
+            setAlert("review-error", "danger", friendlyError(error));
+        }
+    }
+
+    function changeRelationshipCandidatePage(delta) {
+        if (!state.reviewRecord) {
+            return;
+        }
+        const pagination = state.relationshipCandidatesPagination;
+        const current = Number(pagination && pagination.page) || 1;
+        const pages = Number(pagination && pagination.pages) || 0;
+        const next = current + delta;
+        if (next < 1 || next > pages) {
+            return;
+        }
+        loadRelationshipCandidates(state.reviewRecord, next).catch((error) => {
+            setAlert("review-error", "danger", friendlyError(error));
+        });
     }
 
     function openReviewModal(record, issueCodes) {
@@ -1551,6 +1729,9 @@
         }
         state.allowedReviewProductIds = new Set();
         state.allowedReviewRelatedIds = new Set();
+        state.relationshipCandidatesPage = 1;
+        state.relationshipCandidatesPagination = null;
+        state.relationshipRequestSerial += 1;
         hideAlert("review-error");
         setText(
             "review-record-context",
@@ -1567,7 +1748,11 @@
             [record.suggested_product_id, "Producto sugerido por la API"],
         ].forEach(([id, label]) => {
             const number = Number(id);
-            if (!Number.isInteger(number) || state.allowedReviewProductIds.has(number)) {
+            if (
+                !Number.isInteger(number)
+                || number < 1
+                || state.allowedReviewProductIds.has(number)
+            ) {
                 return;
             }
             state.allowedReviewProductIds.add(number);
@@ -1583,33 +1768,17 @@
 
         const relationGroup = byId("review-relationship-group");
         const relationSelect = byId("review-related-record-id");
-        const relationOptions = [];
         const blankRelation = createElement("option", "", "No cambiar la relación");
         blankRelation.value = "";
-        relationOptions.push(blankRelation);
-        const relatedCandidates = record.record_type === "sale" ? [] : relatedCandidatesFor(record);
-        relatedCandidates.forEach((candidate) => {
-            const id = Number(candidate.id);
-            if (!Number.isInteger(id) || state.allowedReviewRelatedIds.has(id)) {
-                return;
-            }
-            state.allowedReviewRelatedIds.add(id);
-            const option = createElement(
-                "option",
-                "",
-                `Registro #${id} · fila ${safeText(candidate.source_row_number)} · ${safeText(candidate.record_type)}`,
-            );
-            option.value = String(id);
-            relationOptions.push(option);
-        });
-        relationSelect.replaceChildren(...relationOptions);
-        relationSelect.disabled = state.allowedReviewRelatedIds.size === 0;
-        const showRelationship = record.record_type !== "sale"
-            && (state.allowedReviewRelatedIds.size > 0
-                || state.reviewIssueCodes.has("related_record_missing")
-                || state.reviewIssueCodes.has("related_record_ambiguous")
-                || state.reviewIssueCodes.has("related_record_invalid"));
-        relationGroup.classList.toggle("d-none", !showRelationship);
+        relationSelect.replaceChildren(blankRelation);
+        relationSelect.disabled = true;
+        relationGroup.classList.toggle("d-none", record.record_type === "sale");
+        byId("review-related-page-label").textContent = "Página —";
+        byId("review-related-prev-page").disabled = true;
+        byId("review-related-next-page").disabled = true;
+        byId("review-related-hint").textContent = record.record_type === "sale"
+            ? "Las ventas no requieren una relación anterior."
+            : "Consultando candidatos válidos en el servidor…";
 
         const flags = getRecordFlags(record);
         setReviewCheckVisibility(
@@ -1635,14 +1804,17 @@
         setReviewCheckVisibility(
             "review-relationship-wrap",
             "review-relationship",
-            showRelationship && (state.allowedReviewRelatedIds.size > 0 || record.related_record_id),
-            flags.relationship,
+            false,
+            false,
         );
 
         const modal = getModal("review-modal");
         if (modal) {
             modal.show();
         }
+        loadRelationshipCandidates(record, 1).catch((error) => {
+            setAlert("review-error", "danger", friendlyError(error));
+        });
     }
 
     function checkedAndVisible(wrapId, inputId) {
@@ -2101,6 +2273,12 @@
                 submitReview(event).catch((error) => {
                     setAlert("review-error", "danger", friendlyError(error));
                 });
+            });
+            byId("review-related-prev-page").addEventListener("click", () => {
+                changeRelationshipCandidatePage(-1);
+            });
+            byId("review-related-next-page").addEventListener("click", () => {
+                changeRelationshipCandidatePage(1);
             });
         }
 

@@ -1,23 +1,25 @@
 #!/usr/bin/env python3
-"""Suite integral, destructivamente segura, del importador histórico CSV v1.
+"""Suite integral y aislada del importador histórico CSV v1.
 
-La suite usa Flask/MySQL reales y limita todas sus escrituras a:
-* archivos temporales bajo ``tempfile``;
-* archivos privados creados por sus propios uploads;
-* las tres tablas históricas, siempre con un ``source_system`` único.
-
-No crea ni modifica productos, categorías, usuarios, notas o movimientos.
+Por defecto la suite es *fail-closed*: crea una aplicación Flask propia, una
+base SQLite en un directorio ``tempfile``, fixtures efímeras y un servidor
+Werkzeug en un puerto local efímero. Nunca reutiliza un servidor existente ni
+la URI de base de datos de desarrollo/producción.
 """
 from __future__ import annotations
 
 import codecs
 import csv
 import hashlib
+import inspect as python_inspect
 import io
 import json
 import os
 import py_compile
+import re
+import secrets
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -35,7 +37,31 @@ from unittest import mock
 from uuid import uuid4
 
 import requests
-from sqlalchemy import MetaData, Table, select
+from flask import Flask
+from sqlalchemy import BigInteger, MetaData, Table, event, inspect as sa_inspect, select, text
+from sqlalchemy.engine import Engine
+from sqlalchemy.ext.compiler import compiles
+from werkzeug.serving import BaseWSGIServer, make_server
+
+# ``app.config`` llama ``load_dotenv`` al importarse. La suite no debe leer el
+# .env real ni siquiera cuando solo se ejecutan helpers puros.
+os.environ["PYTHON_DOTENV_DISABLED"] = "1"
+
+
+@compiles(BigInteger, "sqlite")
+def _compile_big_integer_for_sqlite(_type, _compiler, **_kwargs):
+    """SQLite solo autoincrementa una PK cuyo tipo compilado sea INTEGER."""
+    return "INTEGER"
+
+
+@event.listens_for(Engine, "connect")
+def _configure_isolated_sqlite(dbapi_connection, _connection_record) -> None:
+    if not isinstance(dbapi_connection, sqlite3.Connection):
+        return
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.execute("PRAGMA busy_timeout=30000")
+    cursor.close()
 
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
@@ -44,6 +70,7 @@ if str(ROOT) not in sys.path:
 from app import create_app  # noqa: E402
 from app.extensions import db  # noqa: E402
 from app.models import (  # noqa: E402
+    Category,
     HistoricalDemandRecord,
     HistoricalImport,
     HistoricalImportError,
@@ -77,24 +104,19 @@ from app.services.historical_validation_service import (  # noqa: E402
     resolve_column_mapping,
     validate_historical_row,
 )
+from app.models.user import ROLE_ADMIN, ROLE_INVENTARIO, ROLE_VENDEDOR  # noqa: E402
+from scripts.migrate_historical_imports import (  # noqa: E402
+    IMMUTABILITY_TRIGGER_NAMES,
+    _check_signature,
+    _ensure_immutability_triggers,
+    _normalize_sql,
+)
 
 
-BASE_URL = os.getenv("HISTORICAL_TEST_BASE_URL", "http://127.0.0.1:5000").rstrip("/")
 RUN_ID = uuid4().hex
 RUN_SHORT = RUN_ID[:12].upper()
 SOURCE_PREFIX = f"HISTV1_{RUN_SHORT}_"
 REQUEST_TIMEOUT = 45
-
-ADMIN_IDENTIFIER = os.getenv("HISTORICAL_TEST_ADMIN_IDENTIFIER", "admin")
-ADMIN_PASSWORD = os.getenv("HISTORICAL_TEST_ADMIN_PASSWORD", "admin123")
-INVENTORY_IDENTIFIER = os.getenv(
-    "HISTORICAL_TEST_INVENTORY_IDENTIFIER", "inventario1"
-)
-INVENTORY_PASSWORD = os.getenv(
-    "HISTORICAL_TEST_INVENTORY_PASSWORD", "inventario123"
-)
-SELLER_IDENTIFIER = os.getenv("HISTORICAL_TEST_SELLER_IDENTIFIER", "vendedor1")
-SELLER_PASSWORD = os.getenv("HISTORICAL_TEST_SELLER_PASSWORD", "vendedor123")
 
 OPERATIONAL_TABLES = (
     "products",
@@ -109,6 +131,121 @@ HISTORICAL_TABLES = (
     "historical_demand_records",
     "historical_import_errors",
 )
+
+# Contrato independiente: no se deriva de los modelos y, por tanto, detecta
+# que modelo+migración omitan juntos una columna aprobada o usen solo un alias.
+EXPECTED_SCHEMA_COLUMNS = {
+    "historical_imports": frozenset(
+        {
+            "id",
+            "public_id",
+            "original_filename",
+            "storage_key",
+            "file_sha256",
+            "file_size",
+            "file_format",
+            "delimiter",
+            "source_system",
+            "period_start",
+            "period_end",
+            "status",
+            "parser_version",
+            "validation_version",
+            "mapping_version",
+            "mapping_json",
+            "total_rows",
+            "valid_rows",
+            "warning_rows",
+            "error_rows",
+            "pending_match_rows",
+            "created_by_user_id",
+            "created_at",
+            "previewed_at",
+            "confirmed_by_user_id",
+            "confirmed_at",
+            "reverted_by_user_id",
+            "reverted_at",
+            "revert_reason",
+        }
+    ),
+    "historical_demand_records": frozenset(
+        {
+            "id",
+            "import_id",
+            "source_row_number",
+            "source_record_id",
+            "source_line_id",
+            "document_type",
+            "document_number",
+            "event_date",
+            "original_product_code",
+            "normalized_product_code",
+            "original_product_name",
+            "normalized_product_name",
+            "product_id",
+            "quantity",
+            "unit_price",
+            "record_type",
+            "record_status",
+            "related_source_record_id",
+            "fingerprint",
+            "fingerprint_strength",
+            "match_status",
+            "include_in_demand",
+            "raw_row_json",
+            "created_at",
+        }
+    ),
+    "historical_import_errors": frozenset(
+        {
+            "id",
+            "import_id",
+            "source_row_number",
+            "field_name",
+            "error_code",
+            "severity",
+            "safe_message",
+            "redacted_value",
+            "resolved",
+            "resolved_by_user_id",
+            "resolved_at",
+            "resolution_note",
+            "created_at",
+        }
+    ),
+}
+EXPECTED_SCHEMA_FOREIGN_KEYS = {
+    "historical_imports": frozenset(
+        {
+            ("created_by_user_id", "users", "id"),
+            ("confirmed_by_user_id", "users", "id"),
+            ("reverted_by_user_id", "users", "id"),
+        }
+    ),
+    "historical_demand_records": frozenset(
+        {
+            ("import_id", "historical_imports", "id"),
+            ("product_id", "products", "id"),
+        }
+    ),
+    "historical_import_errors": frozenset(
+        {
+            ("import_id", "historical_imports", "id"),
+            ("resolved_by_user_id", "users", "id"),
+        }
+    ),
+}
+EXPECTED_INDEXED_COLUMNS = {
+    "historical_imports": frozenset(
+        {"public_id", "file_sha256", "status", "created_by_user_id"}
+    ),
+    "historical_demand_records": frozenset(
+        {"import_id", "event_date", "normalized_product_code", "product_id", "fingerprint"}
+    ),
+    "historical_import_errors": frozenset(
+        {"import_id", "severity", "error_code", "resolved_by_user_id"}
+    ),
+}
 API_SNAPSHOT_PATHS = (
     "/api/reports/dashboard-summary",
     "/api/reports/stock-vs-minimum",
@@ -192,7 +329,12 @@ class Runner:
         self.base_seen: set[int] = set()
         self.defects: list[Defect] = []
         self.safe_error_responses: dict[int, Any] = {}
+        self.base_url: str | None = None
+        self.csrf_tokens: dict[int, str] = {}
         self._lock = threading.Lock()
+
+    def register_csrf(self, session: requests.Session, token: str) -> None:
+        self.csrf_tokens[id(session)] = token
 
     def check(
         self,
@@ -247,12 +389,26 @@ class Runner:
         path: str,
         **kwargs: Any,
     ) -> requests.Response:
+        if self.base_url is None:
+            raise RuntimeError("El servidor aislado de la suite no está iniciado.")
+        csrf_mode = kwargs.pop("csrf_mode", "valid")
+        if csrf_mode not in {"valid", "missing", "invalid"}:
+            raise ValueError("csrf_mode no reconocido")
+        if method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and session:
+            token = self.csrf_tokens.get(id(session))
+            headers = dict(kwargs.get("headers") or {})
+            if csrf_mode == "valid" and token:
+                headers.setdefault("X-CSRFToken", token)
+            elif csrf_mode == "invalid":
+                headers["X-CSRFToken"] = "csrf-invalido-aislado"
+            if headers:
+                kwargs["headers"] = headers
         with self._lock:
             self.http_calls += 1
         client = session or requests
         kwargs.setdefault("timeout", REQUEST_TIMEOUT)
         kwargs.setdefault("allow_redirects", False)
-        return client.request(method, f"{BASE_URL}{path}", **kwargs)
+        return client.request(method, f"{self.base_url}{path}", **kwargs)
 
     def remember_error(self, response: Any) -> None:
         status = int(getattr(response, "status_code", 0) or 0)
@@ -263,6 +419,9 @@ class Runner:
 class ArtifactTracker:
     def __init__(self) -> None:
         self.root = Path(tempfile.mkdtemp(prefix=f"historical_csv_v1_{RUN_ID}_"))
+        self.database_path = self.root / "suite.sqlite"
+        self.migration_database_path = self.root / "migration-idempotence.sqlite"
+        self.instance_path = self.root / "instance"
         self.created_temp_files: list[Path] = []
         self.deleted_temp_files = 0
         self.tracked_storage_keys: set[str] = set()
@@ -281,11 +440,13 @@ class ArtifactTracker:
         self.created_temp_files.append(path)
         return path
 
-    def cleanup_temp(self) -> None:
+    def cleanup_temp_files(self) -> None:
         for path in self.created_temp_files:
             if path.exists():
                 path.unlink()
                 self.deleted_temp_files += 1
+
+    def cleanup_root(self) -> None:
         shutil.rmtree(self.root, ignore_errors=True)
 
 
@@ -410,16 +571,157 @@ def recursive_contains_key(value: Any, forbidden_key: str) -> bool:
     return False
 
 
+def inspect_independent_schema(engine) -> tuple[bool, dict[str, Any]]:
+    """Compara el esquema real con el contrato aprobado, no con los modelos."""
+    inspector = sa_inspect(engine)
+    existing = set(inspector.get_table_names())
+    details: dict[str, Any] = {"missing_tables": sorted(set(HISTORICAL_TABLES) - existing)}
+    ok = not details["missing_tables"]
+    for table_name in HISTORICAL_TABLES:
+        if table_name not in existing:
+            continue
+        actual_columns = {
+            column["name"] for column in inspector.get_columns(table_name)
+        }
+        missing_columns = sorted(EXPECTED_SCHEMA_COLUMNS[table_name] - actual_columns)
+
+        indexed_columns: set[str] = set()
+        unique_signatures: set[tuple[str, ...]] = set()
+        for index in inspector.get_indexes(table_name):
+            columns = tuple(index.get("column_names") or ())
+            indexed_columns.update(columns)
+            if index.get("unique"):
+                unique_signatures.add(columns)
+        for constraint in inspector.get_unique_constraints(table_name):
+            columns = tuple(constraint.get("column_names") or ())
+            indexed_columns.update(columns)
+            unique_signatures.add(columns)
+        primary_key = tuple(
+            inspector.get_pk_constraint(table_name).get("constrained_columns") or ()
+        )
+        indexed_columns.update(primary_key)
+        missing_indexes = sorted(
+            EXPECTED_INDEXED_COLUMNS[table_name] - indexed_columns
+        )
+
+        actual_foreign_keys: set[tuple[str, str, str]] = set()
+        for foreign_key in inspector.get_foreign_keys(table_name):
+            target = str(foreign_key.get("referred_table") or "")
+            for local, remote in zip(
+                foreign_key.get("constrained_columns") or (),
+                foreign_key.get("referred_columns") or (),
+            ):
+                actual_foreign_keys.add((str(local), target, str(remote)))
+        missing_foreign_keys = sorted(
+            EXPECTED_SCHEMA_FOREIGN_KEYS[table_name] - actual_foreign_keys
+        )
+        sha_unique = True
+        if table_name == "historical_imports":
+            sha_unique = ("file_sha256",) in unique_signatures
+
+        details[table_name] = {
+            "missing_columns": missing_columns,
+            "missing_indexes": missing_indexes,
+            "missing_foreign_keys": missing_foreign_keys,
+            "file_sha256_unique": sha_unique,
+        }
+        ok = ok and not missing_columns and not missing_indexes
+        ok = ok and not missing_foreign_keys and sha_unique
+    trigger_names: set[str] = set()
+    if engine.url.get_backend_name() == "sqlite":
+        with engine.connect() as connection:
+            trigger_names = {
+                str(row[0])
+                for row in connection.execute(
+                    text("SELECT name FROM sqlite_master WHERE type = 'trigger'")
+                )
+            }
+    missing_triggers = sorted(set(IMMUTABILITY_TRIGGER_NAMES.values()) - trigger_names)
+    details["missing_immutability_triggers"] = missing_triggers
+    ok = ok and not missing_triggers
+    return ok, details
+
+
+def reflected_database_signature(engine, table_names: Iterable[str]) -> str:
+    """Firma estable de esquema+conteos para comprobar idempotencia aislada."""
+    inspector = sa_inspect(engine)
+    metadata = MetaData()
+    payload: dict[str, Any] = {}
+    with engine.connect() as connection:
+        for table_name in sorted(table_names):
+            table = Table(table_name, metadata, autoload_with=engine)
+            payload[table_name] = {
+                "columns": [
+                    (
+                        column["name"],
+                        str(column["type"]),
+                        bool(column.get("nullable")),
+                    )
+                    for column in inspector.get_columns(table_name)
+                ],
+                "indexes": sorted(
+                    (
+                        index.get("name"),
+                        tuple(index.get("column_names") or ()),
+                        bool(index.get("unique")),
+                    )
+                    for index in inspector.get_indexes(table_name)
+                ),
+                "unique": sorted(
+                    tuple(item.get("column_names") or ())
+                    for item in inspector.get_unique_constraints(table_name)
+                ),
+                "foreign_keys": sorted(
+                    (
+                        tuple(item.get("constrained_columns") or ()),
+                        item.get("referred_table"),
+                        tuple(item.get("referred_columns") or ()),
+                    )
+                    for item in inspector.get_foreign_keys(table_name)
+                ),
+                "rows": len(connection.execute(select(table)).all()),
+            }
+    return stable_hash(payload)
+
+
 class HistoricalImportSuite:
     def __init__(self, runner: Runner, artifacts: ArtifactTracker) -> None:
         self.runner = runner
         self.artifacts = artifacts
-        self.app = create_app()
-        self.server_process: subprocess.Popen[Any] | None = None
+        self.artifacts.instance_path.mkdir(parents=True, exist_ok=True)
+        database_uri = (
+            "sqlite:///"
+            + self.artifacts.database_path.resolve().as_posix()
+            + "?check_same_thread=false"
+        )
+        isolated_config = type(
+            "HistoricalImportIsolatedConfig",
+            (),
+            {
+                "SECRET_KEY": secrets.token_urlsafe(32),
+                "APP_ENV": "testing",
+                "TESTING": False,
+                "PROPAGATE_EXCEPTIONS": False,
+                "SQLALCHEMY_DATABASE_URI": database_uri,
+                "SQLALCHEMY_TRACK_MODIFICATIONS": False,
+                "SQLALCHEMY_ENGINE_OPTIONS": {
+                    "connect_args": {"check_same_thread": False, "timeout": 30}
+                },
+                "MAIL_ENABLED": False,
+                "GOOGLE_CLIENT_ID": None,
+                "GOOGLE_CLIENT_SECRET": None,
+                "GOOGLE_REDIRECT_URI": None,
+            },
+        )
+        self.app = create_app(isolated_config)
+        self.app.instance_path = str(self.artifacts.instance_path.resolve())
+        self.server: BaseWSGIServer | None = None
+        self.server_thread: threading.Thread | None = None
         self.source_counter = 0
         self.admin: requests.Session | None = None
         self.inventory: requests.Session | None = None
         self.seller: requests.Session | None = None
+        self.credentials: dict[str, tuple[str, str]] = {}
         self.active_product: dict[str, Any] | None = None
         self.inactive_product: dict[str, Any] | None = None
         self.admin_user_id: int | None = None
@@ -447,65 +749,127 @@ class HistoricalImportSuite:
         clean_tag = "".join(char if char.isalnum() else "_" for char in tag.upper())
         return f"{SOURCE_PREFIX}{self.source_counter:03d}_{clean_tag}"[:100]
 
+    def assert_isolated_runtime(self) -> None:
+        with self.context():
+            url = db.engine.url
+            database = Path(str(url.database or "")).resolve()
+        root = self.artifacts.root.resolve()
+        instance_path = Path(self.app.instance_path).resolve()
+        if url.get_backend_name() != "sqlite":
+            raise RuntimeError("La suite solo puede ejecutarse con SQLite aislado.")
+        if root not in database.parents or database != self.artifacts.database_path.resolve():
+            raise RuntimeError("La base de la suite debe vivir dentro de su tempfile.")
+        if root not in instance_path.parents:
+            raise RuntimeError("El instance_path de la suite debe vivir dentro de tempfile.")
+
+    def initialize_isolated_database(self) -> None:
+        self.assert_isolated_runtime()
+        suffix = RUN_ID[:10].lower()
+        self.credentials = {
+            "admin": (f"hist_admin_{suffix}", secrets.token_urlsafe(24)),
+            "inventario": (f"hist_inventory_{suffix}", secrets.token_urlsafe(24)),
+            "vendedor": (f"hist_seller_{suffix}", secrets.token_urlsafe(24)),
+        }
+        with self.context():
+            db.create_all()
+            with db.engine.begin() as connection:
+                _ensure_immutability_triggers(connection)
+            category = Category(
+                name=f"Categoría histórica aislada {RUN_SHORT}",
+                description="Fixture efímera de la suite histórica.",
+            )
+            db.session.add(category)
+            db.session.flush()
+            active = Product(
+                code=f"HIST-ACT-{RUN_SHORT}",
+                name=f"Producto activo aislado {RUN_SHORT}",
+                category_id=category.id,
+                unit="unidad",
+                current_stock=37,
+                minimum_stock=9,
+                purchase_price=Decimal("1.00"),
+                sale_price=Decimal("2.00"),
+                is_active=True,
+            )
+            inactive = Product(
+                code=f"HIST-INA-{RUN_SHORT}",
+                name=f"Producto inactivo aislado {RUN_SHORT}",
+                category_id=category.id,
+                unit="unidad",
+                current_stock=4,
+                minimum_stock=2,
+                purchase_price=Decimal("1.00"),
+                sale_price=Decimal("2.00"),
+                is_active=False,
+            )
+            db.session.add_all([active, inactive])
+            for role, display in (
+                (ROLE_ADMIN, "Administrador"),
+                (ROLE_INVENTARIO, "Inventario"),
+                (ROLE_VENDEDOR, "Vendedor"),
+            ):
+                username, password = self.credentials[role]
+                user = User(
+                    name=f"{display} aislado {RUN_SHORT}",
+                    email=f"{username}@example.test",
+                    username=username,
+                    role=role,
+                    is_active=True,
+                    email_verified=True,
+                )
+                user.set_password(password)
+                db.session.add(user)
+            db.session.commit()
+
     def ensure_server(self) -> None:
+        if self.server is not None:
+            raise RuntimeError("El servidor aislado ya fue iniciado.")
+        # Servidor de una hebra: dos clientes pueden competir, pero SQLite no
+        # recibe escrituras simultáneas que producirían falsos "database locked".
+        self.server = make_server("127.0.0.1", 0, self.app, threaded=False)
+        self.runner.base_url = f"http://127.0.0.1:{self.server.server_port}"
+        self.server_thread = threading.Thread(
+            target=self.server.serve_forever,
+            name=f"historical-suite-{RUN_SHORT}",
+            daemon=True,
+        )
+        self.server_thread.start()
         try:
             response = requests.get(
-                f"{BASE_URL}/api/historical-imports", timeout=4, allow_redirects=False
+                f"{self.runner.base_url}/api/historical-imports",
+                timeout=4,
+                allow_redirects=False,
             )
-            running = response.status_code in {200, 401, 403}
+            running = response.status_code == 401
         except requests.RequestException:
             running = False
-        if running:
-            self.runner.check("Servidor Flask real disponible", True)
-            return
-
-        command = [
-            sys.executable,
-            "-c",
-            (
-                "from app import create_app; "
-                "create_app().run(host='127.0.0.1', port=5000, "
-                "debug=False, use_reloader=False, threaded=True)"
-            ),
-        ]
-        self.server_process = subprocess.Popen(
-            command,
-            cwd=ROOT,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        deadline = time.monotonic() + 25
-        while time.monotonic() < deadline:
-            try:
-                response = requests.get(
-                    f"{BASE_URL}/api/historical-imports",
-                    timeout=2,
-                    allow_redirects=False,
-                )
-                if response.status_code in {200, 401, 403}:
-                    self.runner.check("Servidor Flask iniciado para la suite", True)
-                    return
-            except requests.RequestException:
-                time.sleep(0.4)
         self.runner.check(
-            "Servidor Flask iniciado para la suite",
-            False,
-            expected="servidor HTTP disponible",
-            actual="sin respuesta",
-            cause="El servidor local no inició o el puerto configurado no está disponible.",
+            "Servidor Werkzeug aislado iniciado en puerto efímero",
+            running,
+            expected="servidor propio con HTTP 401",
+            actual=(response.status_code if running else "sin respuesta"),
+            cause="El servidor WSGI aislado no pudo iniciar sobre loopback.",
             priority="P0",
         )
-        raise RuntimeError("Flask no está disponible")
+        if not running:
+            raise RuntimeError("El servidor Werkzeug aislado no está disponible")
 
     def stop_server(self) -> None:
-        if self.server_process is None:
-            return
-        self.server_process.terminate()
-        try:
-            self.server_process.wait(timeout=8)
-        except subprocess.TimeoutExpired:
-            self.server_process.kill()
-            self.server_process.wait(timeout=5)
+        if self.server is not None:
+            self.server.shutdown()
+            self.server.server_close()
+        if self.server_thread is not None:
+            self.server_thread.join(timeout=10)
+            if self.server_thread.is_alive():
+                raise RuntimeError("El servidor Werkzeug aislado no se detuvo.")
+        self.server = None
+        self.server_thread = None
+        self.runner.base_url = None
+
+    def dispose_database(self) -> None:
+        with self.app.app_context():
+            db.session.remove()
+            db.engine.dispose()
 
     def table_snapshot(self, table_name: str) -> dict[str, Any]:
         metadata = MetaData()
@@ -622,26 +986,27 @@ class HistoricalImportSuite:
                 for (value,) in db.session.query(HistoricalImport.id).all()
             }
         self.runner.check(
-            "Existe producto activo real reutilizable",
+            "Existe fixture efímera de producto activo",
             self.active_product is not None,
             expected="al menos un producto activo",
             actual=self.active_product is not None,
-            cause="La BD semilla no contiene un producto activo para matching exacto.",
+            cause="La inicialización aislada no creó el producto activo.",
             priority="P0",
         )
-        if self.inactive_product is None:
-            self.runner.skip(
-                "Existe producto inactivo real reutilizable",
-                "La cobertura inactiva se limitará a helper puro; no se crea producto.",
-            )
-        else:
-            self.runner.check("Existe producto inactivo real reutilizable", True)
         self.runner.check(
-            "Existe administrador activo para auditoría",
+            "Existe fixture efímera de producto inactivo",
+            self.inactive_product is not None,
+            expected="un producto inactivo aislado",
+            actual=self.inactive_product is not None,
+            cause="La inicialización aislada no creó el producto inactivo.",
+            priority="P0",
+        )
+        self.runner.check(
+            "Existe fixture efímera de administrador activo",
             self.admin_user_id is not None,
             expected="usuario admin activo",
             actual=self.admin_user_id is not None,
-            cause="La BD semilla no tiene un administrador activo.",
+            cause="La inicialización aislada no creó el administrador.",
             priority="P0",
         )
 
@@ -654,16 +1019,31 @@ class HistoricalImportSuite:
             json={"identifier": identifier, "password": password},
         )
         payload = response_json(response)
+        role = (
+            payload.get("user", {}).get("role")
+            if isinstance(payload, dict)
+            else None
+        )
+        csrf_ready = role == ROLE_VENDEDOR
+        if response.status_code == 200 and role in {ROLE_ADMIN, ROLE_INVENTARIO}:
+            page = self.runner.request(session, "GET", "/historical-imports")
+            match = re.search(r'csrfToken:\s*(".*?")\s*,', page.text)
+            if page.status_code == 200 and match:
+                token = json.loads(match.group(1))
+                if isinstance(token, str) and token:
+                    self.runner.register_csrf(session, token)
+                    csrf_ready = True
         self.runner.check(
-            f"Login semilla {role_label} sin exponer credenciales",
+            f"Login fixture {role_label} y CSRF de sesión sin exponer credenciales",
             response.status_code == 200
             and isinstance(payload, dict)
             and isinstance(payload.get("user"), dict)
-            and payload["user"].get("role") is not None
+            and role is not None
+            and csrf_ready
             and "password_hash" not in json.dumps(payload, ensure_ascii=False),
-            expected="HTTP 200 y payload público",
+            expected="HTTP 200, payload público y CSRF para roles autorizados",
             actual=response.status_code,
-            cause="Las credenciales semilla/variables de entorno no coinciden con la BD.",
+            cause="Las fixtures aisladas o el token CSRF de la página no están disponibles.",
             priority="P0",
         )
         return session
@@ -697,15 +1077,16 @@ class HistoricalImportSuite:
         }
 
     def detect_private_additions(self) -> None:
-        current = self.private_snapshot()["files"]
-        for name in set(current) - self.initial_private_names:
-            self.artifacts.tracked_storage_keys.add(name)
+        """No hace descubrimiento global: solo se limpian claves de lotes propios."""
+        return
 
     def track_import(self, public_id: str) -> dict[str, Any]:
         with self.context():
             item = HistoricalImport.query.filter_by(public_id=public_id).first()
             if item is None:
                 raise RuntimeError("El upload respondió un lote no persistido")
+            if not item.source_system.startswith(SOURCE_PREFIX):
+                raise RuntimeError("El lote no pertenece a esta ejecución aislada")
             self.artifacts.created_import_ids.add(int(item.id))
             self.artifacts.created_public_ids.add(item.public_id)
             self.artifacts.tracked_storage_keys.add(item.storage_key)
@@ -754,7 +1135,6 @@ class HistoricalImportSuite:
             public_id = (payload.get("historical_import") or {}).get("id")
             if isinstance(public_id, str):
                 tracked = self.track_import(public_id)
-        self.detect_private_additions()
         if response.status_code >= 400:
             self.runner.remember_error(response)
         return response, payload, tracked
@@ -815,8 +1195,10 @@ class HistoricalImportSuite:
             )
             return [
                 {
-                    column.name: getattr(record, column.name)
-                    for column in HistoricalDemandRecord.__table__.columns
+                    attribute.key: getattr(record, attribute.key)
+                    for attribute in sa_inspect(
+                        HistoricalDemandRecord
+                    ).column_attrs
                 }
                 for record in records
             ]
@@ -838,8 +1220,10 @@ class HistoricalImportSuite:
             )
             return [
                 {
-                    column.name: getattr(error, column.name)
-                    for column in HistoricalImportError.__table__.columns
+                    attribute.key: getattr(error, attribute.key)
+                    for attribute in sa_inspect(
+                        HistoricalImportError
+                    ).column_attrs
                 }
                 for error in errors
             ]
@@ -901,35 +1285,106 @@ class HistoricalImportSuite:
             db.session.commit()
 
     def run_migration_idempotence(self) -> None:
-        before = self.db_snapshot(OPERATIONAL_TABLES)
-        historical_before = self.db_snapshot(HISTORICAL_TABLES)
-        result = subprocess.run(
-            [sys.executable, str(ROOT / "scripts" / "migrate_historical_imports.py")],
-            cwd=ROOT,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=180,
-            check=False,
+        migration_instance = self.artifacts.root / "migration-instance"
+        migration_instance.mkdir(parents=True, exist_ok=True)
+        migration_uri = (
+            "sqlite:///"
+            + self.artifacts.migration_database_path.resolve().as_posix()
+            + "?check_same_thread=false"
         )
-        after = self.db_snapshot(OPERATIONAL_TABLES)
-        historical_after = self.db_snapshot(HISTORICAL_TABLES)
+        migration_app = Flask(
+            f"historical_migration_{RUN_ID}",
+            instance_path=str(migration_instance.resolve()),
+        )
+        migration_app.config.update(
+            SECRET_KEY=secrets.token_urlsafe(32),
+            TESTING=True,
+            SQLALCHEMY_DATABASE_URI=migration_uri,
+            SQLALCHEMY_TRACK_MODIFICATIONS=False,
+            SQLALCHEMY_ENGINE_OPTIONS={
+                "connect_args": {"check_same_thread": False, "timeout": 30}
+            },
+        )
+        db.init_app(migration_app)
+        schema_ok = False
+        idempotent = False
+        operational_unchanged = False
+        schema_details: dict[str, Any] = {}
+        migration_engine = None
+        with migration_app.app_context():
+            migration_engine = db.engine
+            migration_database = Path(str(migration_engine.url.database or "")).resolve()
+            if (
+                migration_engine.url.get_backend_name() != "sqlite"
+                or migration_database
+                != self.artifacts.migration_database_path.resolve()
+                or self.artifacts.root.resolve() not in migration_database.parents
+            ):
+                raise RuntimeError("La migración de prueba no usa SQLite temporal.")
+
+            # Se crea solo el soporte operativo vacío y luego se reconstruyen
+            # las tres tablas históricas con checkfirst, como migración manual.
+            db.create_all()
+            for model in (
+                HistoricalImportError,
+                HistoricalDemandRecord,
+                HistoricalImport,
+            ):
+                model.__table__.drop(bind=migration_engine, checkfirst=True)
+            operational_names = sorted(
+                set(sa_inspect(migration_engine).get_table_names())
+                - set(HISTORICAL_TABLES)
+            )
+            operational_before = reflected_database_signature(
+                migration_engine, operational_names
+            )
+            for model in (
+                HistoricalImport,
+                HistoricalDemandRecord,
+                HistoricalImportError,
+            ):
+                model.__table__.create(bind=migration_engine, checkfirst=True)
+            with migration_engine.begin() as connection:
+                _ensure_immutability_triggers(connection)
+            first_signature = reflected_database_signature(
+                migration_engine, HISTORICAL_TABLES
+            )
+            schema_ok, schema_details = inspect_independent_schema(migration_engine)
+
+            for model in (
+                HistoricalImport,
+                HistoricalDemandRecord,
+                HistoricalImportError,
+            ):
+                model.__table__.create(bind=migration_engine, checkfirst=True)
+            with migration_engine.begin() as connection:
+                _ensure_immutability_triggers(connection)
+            second_signature = reflected_database_signature(
+                migration_engine, HISTORICAL_TABLES
+            )
+            operational_after = reflected_database_signature(
+                migration_engine, operational_names
+            )
+            idempotent = first_signature == second_signature
+            operational_unchanged = operational_before == operational_after
+            db.session.remove()
+
+        assert migration_engine is not None
+        migration_engine.dispose()
         self.runner.check(
-            "Migración idempotente termina en exit code 0",
-            result.returncode == 0,
-            expected=0,
-            actual=result.returncode,
-            cause="scripts/migrate_historical_imports.py no verificó el esquema actual.",
+            "Migración aislada cumple el esquema contractual independiente",
+            schema_ok,
+            expected="columnas, FKs e índices contractuales exactos presentes",
+            actual=schema_details,
+            cause="Los modelos/migración usan alias o carecen de elementos aprobados.",
             priority="P0",
         )
         self.runner.check(
-            "Migración idempotente no cambia tablas operativas ni históricas",
-            before == after and historical_before == historical_after,
+            "Migración SQLite temporal es idempotente y no cambia operativa",
+            idempotent and operational_unchanged,
             expected="snapshots idénticos",
-            actual=before == after and historical_before == historical_after,
-            cause="La migración idempotente produjo DDL/DML no esperado.",
+            actual=(idempotent, operational_unchanged),
+            cause="La segunda creación checkfirst alteró esquema/datos aislados.",
             priority="P0",
         )
 
@@ -1048,6 +1503,64 @@ class HistoricalImportSuite:
             expected="302 /login",
             actual=f"{page.status_code} {page.headers.get('Location', '')}",
             cause="pages.historical_imports no aplica login_required.",
+            priority="P0",
+        )
+
+    def csrf_contract_checks(self) -> None:
+        assert self.admin
+        endpoint = "/api/historical-imports/upload"
+        missing = self.runner.request(
+            self.admin,
+            "POST",
+            endpoint,
+            csrf_mode="missing",
+        )
+        invalid = self.runner.request(
+            self.admin,
+            "POST",
+            endpoint,
+            csrf_mode="invalid",
+        )
+        valid = self.runner.request(
+            self.admin,
+            "POST",
+            endpoint,
+            csrf_mode="valid",
+        )
+        for response in (missing, invalid, valid):
+            self.runner.remember_error(response)
+        missing_payload = response_json(missing) or {}
+        invalid_payload = response_json(invalid) or {}
+        valid_payload = response_json(valid) or {}
+        self.runner.check(
+            "CSRF ausente bloquea POST histórico antes del controlador",
+            missing.status_code == 400
+            and safe_error_json(missing, 400)
+            and "csrf" in str(missing_payload.get("error", "")).casefold(),
+            expected="400 JSON CSRF",
+            actual=missing.status_code,
+            cause="La ruta mutante no exige token CSRF para sesión cookie.",
+            priority="P0",
+        )
+        self.runner.check(
+            "CSRF inválido bloquea POST histórico",
+            invalid.status_code == 400
+            and safe_error_json(invalid, 400)
+            and "csrf" in str(invalid_payload.get("error", "")).casefold(),
+            expected="400 JSON CSRF",
+            actual=invalid.status_code,
+            cause="La ruta mutante acepta un token CSRF no ligado a la sesión.",
+            priority="P0",
+        )
+        self.runner.check(
+            "CSRF válido supera la capa CSRF y llega a validación de upload",
+            valid.status_code == 400
+            and safe_error_json(valid, 400)
+            and "csrf" not in str(valid_payload.get("error", "")).casefold()
+            and "file" in str(valid_payload.get("error", "")).casefold(),
+            expected="400 del campo file, no de CSRF",
+            actual=valid_payload,
+            cause="El token emitido por la página no valida para la misma sesión.",
             priority="P0",
         )
 
@@ -1234,16 +1747,16 @@ class HistoricalImportSuite:
             )
             self.runner.remember_error(preview)
         self.runner.check(
-            "Delimitador incorrecto no puede previsualizarse",
-            response.status_code == 201
-            and preview is not None
-            and preview.status_code == 422,
-            expected="upload estructural 201 y preview 422",
+            "Delimitador incorrecto se rechaza antes de crear el lote",
+            response.status_code == 422
+            and wrong_import is None
+            and preview is None,
+            expected="upload estructural 422 sin lote",
             actual=(
                 response.status_code,
                 preview.status_code if preview is not None else None,
             ),
-            cause="resolve_column_mapping no detecta que el CSV no usa punto y coma.",
+            cause="_inspect_csv_structure no detecta que el CSV no usa punto y coma.",
             priority="P1",
         )
 
@@ -1266,14 +1779,14 @@ class HistoricalImportSuite:
             )
             self.runner.remember_error(missing_preview)
         self.runner.check(
-            "Headers obligatorios faltantes bloquean preview",
-            response.status_code == 201
-            and missing_preview is not None
-            and missing_preview.status_code == 422,
+            "Headers obligatorios faltantes bloquean carga o preview",
+            response.status_code == 422
+            and missing_import is None
+            and missing_preview is None,
             base=8,
-            expected="preview 422",
-            actual=missing_preview.status_code if missing_preview else None,
-            cause="resolve_column_mapping no exige los campos requeridos.",
+            expected="upload estructural 422 sin lote",
+            actual=response.status_code,
+            cause="La validación estructural no exige las columnas mínimas.",
             priority="P0",
         )
 
@@ -1459,7 +1972,7 @@ class HistoricalImportSuite:
         }
 
     def limit_and_mapping_checks(self) -> dict[str, Any]:
-        assert self.admin and self.active_product
+        assert self.admin and self.inventory and self.active_product
         extra_headers = tuple(f"extra_{index:02d}" for index in range(30))
         headers_40 = tuple(CSV_HEADERS) + extra_headers
         row = self.row(
@@ -1483,6 +1996,26 @@ class HistoricalImportSuite:
                 f"/api/historical-imports/{tracked_40['public_id']}/preview",
                 json={"mapping": mapping},
             )
+        admin_detail_40 = (
+            self.runner.request(
+                self.admin,
+                "GET",
+                f"/api/historical-imports/{tracked_40['public_id']}",
+            )
+            if tracked_40
+            else None
+        )
+        inventory_detail_40 = (
+            self.runner.request(
+                self.inventory,
+                "GET",
+                f"/api/historical-imports/{tracked_40['public_id']}",
+            )
+            if tracked_40 and self.inventory
+            else None
+        )
+        admin_detail_payload = response_json(admin_detail_40) or {}
+        inventory_detail_payload = response_json(inventory_detail_40) or {}
         records_40 = self.records(tracked_40["public_id"]) if tracked_40 else []
         errors_40 = self.errors(tracked_40["public_id"]) if tracked_40 else []
         self.runner.check(
@@ -1492,12 +2025,17 @@ class HistoricalImportSuite:
             and preview_40.status_code == 200
             and len(records_40) == 1
             and set((records_40[0].get("raw_row_json") or {})) == set(CSV_HEADERS)
+            and admin_detail_payload.get("admin_metadata", {})
+            .get("metadata", {})
+            .get("headers")
+            == list(headers_40)
+            and "admin_metadata" not in inventory_detail_payload
             and any(
                 issue["error_code"] == "unmapped_columns_ignored"
                 and issue["severity"] == SEVERITY_WARNING
                 for issue in errors_40
             ),
-            expected="40 columnas, preview 200, raw_row allowlist",
+            expected="headers recuperables admin, preview 200 y raw_row allowlist",
             actual=(
                 upload_40.status_code,
                 preview_40.status_code if preview_40 else None,
@@ -1583,6 +2121,30 @@ class HistoricalImportSuite:
         return {"tracked_40": tracked_40}
 
     def pure_helper_checks(self) -> None:
+        normalized_charset_literal = _normalize_sql("_utf8mb4'uploaded'")
+        normalized_status_literal = _normalize_sql("'dry_run_ready'")
+        status_signature = _check_signature(
+            "status IN ('uploaded', 'previewed', 'dry_run_ready', "
+            "'confirmed', 'reverted')"
+        )
+        self.runner.check(
+            "Normalizador de CHECK conserva guiones bajos dentro de literales",
+            normalized_charset_literal == "'uploaded'"
+            and normalized_status_literal == "'dry_run_ready'"
+            and "'dry_run_ready'" in status_signature,
+            expected="introductor charset removido y dry_run_ready intacto",
+            actual=(
+                normalized_charset_literal,
+                normalized_status_literal,
+                status_signature,
+            ),
+            cause=(
+                "La verificación de CHECK puede ocultar estados MySQL "
+                "incompatibles al recortar sufijos de literales."
+            ),
+            priority="P0",
+        )
+
         parsed, issues = validate_historical_row(
             {
                 "event_date": "2025-01-01",
@@ -1598,17 +2160,17 @@ class HistoricalImportSuite:
             }
         )
         self.runner.check(
-            "Normalización quita espacios externos y preserva ceros iniciales",
+            "Normalización conserva original y preserva ceros iniciales",
             not issues
             and parsed is not None
-            and parsed.values["product_code_original"] == "00123"
+            and parsed.values["product_code_original"] == "  00123  "
             and parsed.values["product_code_normalized"] == "00123"
             and parsed.values["source_line_id_normalized"] == "0001",
-            expected="00123 y 0001 preservados",
+            expected="original exacto; normalizados 00123 y 0001",
             actual=(
                 parsed.values.get("product_code_normalized") if parsed else None
             ),
-            cause="strip_external/normalize_code altera ceros o espacios internos.",
+            cause="La validación sobrescribe el código original o altera ceros.",
             priority="P1",
         )
         self.runner.check(
@@ -1618,6 +2180,92 @@ class HistoricalImportSuite:
             actual=normalize_code(" ab-c01 "),
             cause="normalize_code no aplica uppercase exacto.",
             priority="P1",
+        )
+        nfc_code = normalize_code("  a\u0301 b/001-xy  ")
+        self.runner.check(
+            "NFC preserva espacios internos, barras, guiones y ceros",
+            nfc_code == "Á B/001-XY",
+            expected="Á B/001-XY",
+            actual=nfc_code,
+            cause="normalize_code altera caracteres internos o no aplica NFC.",
+            priority="P0",
+        )
+
+        boundary_start, start_issues = validate_historical_row(
+            {
+                "event_date": "2025-01-01",
+                "product_code": "BOUNDARY",
+                "product_name": "",
+                "quantity": "1",
+                "record_type": "sale",
+                "record_status": "issued",
+                "document_number": "DOC-START",
+                "source_record_id": "",
+                "source_line_id": "1",
+                "unit_price": "",
+            }
+        )
+        boundary_end, end_issues = validate_historical_row(
+            {
+                "event_date": "2025-12-31",
+                "product_code": "BOUNDARY",
+                "product_name": "",
+                "quantity": "1",
+                "record_type": "sale",
+                "record_status": "issued",
+                "document_number": "DOC-END",
+                "source_record_id": "",
+                "source_line_id": "2",
+                "unit_price": "",
+            }
+        )
+        _, hour_issues = validate_historical_row(
+            {
+                "event_date": "2025-06-15T08:00:00-04:00",
+                "product_code": "BOUNDARY",
+                "product_name": "",
+                "quantity": "1",
+                "record_type": "sale",
+                "record_status": "issued",
+                "document_number": "DOC-HOUR",
+                "source_record_id": "",
+                "source_line_id": "3",
+                "unit_price": "",
+            }
+        )
+        _, overflow_issues = validate_historical_row(
+            {
+                "event_date": "2025-06-15",
+                "product_code": "BOUNDARY",
+                "product_name": "",
+                "quantity": "10000000000.00",
+                "record_type": "sale",
+                "record_status": "issued",
+                "document_number": "DOC-OVERFLOW",
+                "source_record_id": "",
+                "source_line_id": "4",
+                "unit_price": "",
+            }
+        )
+        self.runner.check(
+            "Fechas límite 2025 son válidas y fecha-hora se rechaza",
+            boundary_start is not None
+            and boundary_end is not None
+            and not start_issues
+            and not end_issues
+            and any(issue.error_code == "invalid_event_date" for issue in hour_issues),
+            expected="01-01/12-31 válidas; timestamp inválido",
+            actual=(len(start_issues), len(end_issues), len(hour_issues)),
+            cause="parse_date_2025 no aplica exactamente YYYY-MM-DD y límites inclusivos.",
+            priority="P0",
+        )
+        self.runner.check(
+            "Cantidad que excede DECIMAL(12,2) se rechaza",
+            any(issue.error_code == "invalid_quantity" for issue in overflow_issues),
+            expected="invalid_quantity",
+            actual=[issue.error_code for issue in overflow_issues],
+            cause="parse_decimal_12_2 no aplica el máximo de DECIMAL(12,2).",
+            priority="P0",
         )
 
         fakes = [
@@ -1667,6 +2315,26 @@ class HistoricalImportSuite:
             quantity=Decimal("1.00"),
             record_type="sale",
         )
+        weak_without_document = build_fingerprint(
+            source_system="SOURCE",
+            document_type="historical_demand",
+            document_number_normalized=None,
+            source_line_id_normalized="1",
+            event_date=date(2025, 1, 1),
+            product_code_normalized="ABC",
+            quantity=Decimal("1.00"),
+            record_type="sale",
+        )
+        weak_without_line = build_fingerprint(
+            source_system="SOURCE",
+            document_type="historical_demand",
+            document_number_normalized="DOC-1",
+            source_line_id_normalized=None,
+            event_date=date(2025, 1, 1),
+            product_code_normalized="ABC",
+            quantity=Decimal("1.00"),
+            record_type="sale",
+        )
         self.runner.check(
             "Fingerprints strong y weak son SHA-256 deterministas distintos",
             strong.strength == "strong"
@@ -1697,8 +2365,43 @@ class HistoricalImportSuite:
             priority="P1",
         )
 
+        permitted_statuses = {
+            "sale": {"issued", "active", "cancelled", "voided", "superseded"},
+            "return": {"issued", "active", "cancelled", "voided", "superseded"},
+            "cancellation": {"issued", "active", "voided", "superseded"},
+            "correction": {"issued", "active", "voided", "superseded"},
+        }
+        matrix_ok = True
+        for record_type in ("sale", "return", "cancellation", "correction"):
+            for record_status in (
+                "issued",
+                "active",
+                "cancelled",
+                "voided",
+                "superseded",
+            ):
+                matrix_row = self.row(
+                    record_type=record_type,
+                    record_status=record_status,
+                    document_number=f"DOC-{RUN_SHORT}-MATRIX",
+                    source_line_id=f"{record_type}-{record_status}",
+                )
+                parsed, matrix_issues = validate_historical_row(matrix_row)
+                expected_valid = record_status in permitted_statuses[record_type]
+                actual_valid = parsed is not None and not matrix_issues
+                matrix_ok = matrix_ok and actual_valid == expected_valid
+        self.runner.check(
+            "Matriz completa record_type/record_status aplica la política v1",
+            matrix_ok,
+            expected="20 combinaciones evaluadas según allowlist",
+            actual=matrix_ok,
+            cause="ALLOWED_TYPE_STATUS no coincide con la política documentada.",
+            priority="P0",
+        )
+
     def valid_lifecycle_checks(self) -> dict[str, Any]:
         assert self.admin and self.active_product
+        operational_before_upload = self.db_snapshot(OPERATIONAL_TABLES)
         original_code = self.active_product["code"]
         row = self.row(
             code=f"  {original_code.lower()}  ",
@@ -1730,6 +2433,104 @@ class HistoricalImportSuite:
         )
         if not tracked:
             raise RuntimeError("No se creó el lote válido principal")
+
+        uploaded_state = self.import_state(tracked["public_id"])
+        self.runner.check(
+            "Upload solo conserva archivo/metadatos; no importa ni crea staging",
+            uploaded_state is not None
+            and uploaded_state["status"] == "uploaded"
+            and uploaded_state["counts"]["total"] == 0
+            and not self.records(tracked["public_id"])
+            and not self.errors(tracked["public_id"])
+            and self.db_snapshot(OPERATIONAL_TABLES) == operational_before_upload,
+            expected="uploaded, cero records/errors y operativa idéntica",
+            actual=(
+                uploaded_state["status"] if uploaded_state else None,
+                uploaded_state["counts"] if uploaded_state else None,
+            ),
+            cause="upload_import ejecutó parsing/importación automática.",
+            priority="P0",
+        )
+        fingerprint_parameters = set(
+            python_inspect.signature(build_fingerprint).parameters
+        )
+        repeated_strong = build_fingerprint(
+            source_system="SOURCE",
+            document_type="historical_demand",
+            document_number_normalized="DOC-1",
+            source_line_id_normalized="1",
+            event_date=date(2025, 1, 1),
+            product_code_normalized="ABC",
+            quantity=Decimal("1"),
+            record_type="sale",
+        )
+        strong = build_fingerprint(
+            source_system="SOURCE",
+            document_type="historical_demand",
+            document_number_normalized="DOC-1",
+            source_line_id_normalized="1",
+            event_date=date(2025, 1, 1),
+            product_code_normalized="ABC",
+            quantity=Decimal("1.00"),
+            record_type="sale",
+        )
+        weak_without_document = build_fingerprint(
+            source_system="SOURCE",
+            document_type="historical_demand",
+            document_number_normalized=None,
+            source_line_id_normalized="1",
+            event_date=date(2025, 1, 1),
+            product_code_normalized="ABC",
+            quantity=Decimal("1.00"),
+            record_type="sale",
+        )
+        weak_without_line = build_fingerprint(
+            source_system="SOURCE",
+            document_type="historical_demand",
+            document_number_normalized="DOC-1",
+            source_line_id_normalized=None,
+            event_date=date(2025, 1, 1),
+            product_code_normalized="ABC",
+            quantity=Decimal("1.00"),
+            record_type="sale",
+        )
+        lower_line = build_fingerprint(
+            source_system="SOURCE",
+            document_type="historical_demand",
+            document_number_normalized="DOC-1",
+            source_line_id_normalized="line-a",
+            event_date=date(2025, 1, 1),
+            product_code_normalized="ABC",
+            quantity=Decimal("1.00"),
+            record_type="sale",
+        )
+        upper_line = build_fingerprint(
+            source_system="SOURCE",
+            document_type="historical_demand",
+            document_number_normalized="DOC-1",
+            source_line_id_normalized="LINE-A",
+            event_date=date(2025, 1, 1),
+            product_code_normalized="ABC",
+            quantity=Decimal("1.00"),
+            record_type="sale",
+        )
+        self.runner.check(
+            "Fingerprint omite filename/fila, conserva case de línea y clasifica weak",
+            "filename" not in fingerprint_parameters
+            and "source_row_number" not in fingerprint_parameters
+            and repeated_strong.value == strong.value
+            and weak_without_document.strength == "weak"
+            and weak_without_line.strength == "weak"
+            and lower_line.value != upper_line.value,
+            expected="firma estable; IDs weak; source_line case-sensitive",
+            actual=(
+                sorted(fingerprint_parameters),
+                weak_without_document.strength,
+                weak_without_line.strength,
+            ),
+            cause="build_fingerprint incluye trazabilidad física o clasifica weak incorrectamente.",
+            priority="P0",
+        )
 
         file_hash, file_size = sha256_file(path)
         private = self.private_path(tracked["storage_key"])
@@ -1793,7 +2594,18 @@ class HistoricalImportSuite:
             and state["created_at"] is not None
             and state["previewed_at"] is not None
             and state["mapping"] == {name: name for name in CSV_HEADERS}
-            and state["metadata"].get("column_count") == len(CSV_HEADERS),
+            and state["metadata"].get("column_count") == len(CSV_HEADERS)
+            and state["counts"]
+            == {
+                "total": 1,
+                "valid": 1,
+                "errors": 0,
+                "warnings": 0,
+                "reviews": 0,
+                "matched": 1,
+                "strong": 1,
+                "weak": 0,
+            },
             base=29,
             expected="auditoría completa",
             actual=state,
@@ -1845,8 +2657,13 @@ class HistoricalImportSuite:
             priority="P0",
         )
 
+        concurrent_admin, concurrent_password = self.credentials[ROLE_ADMIN]
         concurrent_sessions = [
-            self.login(ADMIN_IDENTIFIER, ADMIN_PASSWORD, f"admin concurrente {index}")
+            self.login(
+                concurrent_admin,
+                concurrent_password,
+                f"admin concurrente {index}",
+            )
             for index in (1, 2)
         ]
 
@@ -1893,6 +2710,85 @@ class HistoricalImportSuite:
             priority="P0",
         )
 
+        immutable_before = stable_hash(confirmed_records)
+        confirmed_state_before = self.import_state(tracked["public_id"])
+        preview_after_confirm = self.runner.request(
+            self.admin,
+            "POST",
+            f"/api/historical-imports/{tracked['public_id']}/preview",
+            json={},
+        )
+        review_after_confirm = self.runner.request(
+            self.admin,
+            "POST",
+            (
+                f"/api/historical-imports/{tracked['public_id']}"
+                f"/records/{confirmed_records[0]['id']}/review"
+            ),
+            json={"product_id": self.active_product["id"]},
+        )
+        self.runner.remember_error(preview_after_confirm)
+        self.runner.remember_error(review_after_confirm)
+        confirmed_state_after = self.import_state(tracked["public_id"])
+        self.runner.check(
+            "Filas confirmadas son inmutables ante preview y review posteriores",
+            preview_after_confirm.status_code == 409
+            and review_after_confirm.status_code == 409
+            and stable_hash(self.records(tracked["public_id"])) == immutable_before
+            and confirmed_state_before == confirmed_state_after,
+            expected="dos 409 y hashes/estado idénticos",
+            actual=(preview_after_confirm.status_code, review_after_confirm.status_code),
+            cause="Un endpoint de staging permite mutar un lote confirmado.",
+            priority="P0",
+        )
+
+        confirmed_record_id = int(confirmed_records[0]["id"])
+        orm_update_blocked = False
+        sql_update_blocked = False
+        sql_delete_blocked = False
+        with self.context():
+            record = db.session.get(HistoricalDemandRecord, confirmed_record_id)
+            assert record is not None
+            record.quantity = Decimal("999.00")
+            try:
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
+                orm_update_blocked = True
+        with self.context():
+            try:
+                db.session.execute(
+                    HistoricalDemandRecord.__table__.update()
+                    .where(HistoricalDemandRecord.id == confirmed_record_id)
+                    .values(quantity=Decimal("998.00"))
+                )
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
+                sql_update_blocked = True
+        with self.context():
+            try:
+                db.session.execute(
+                    HistoricalDemandRecord.__table__.delete().where(
+                        HistoricalDemandRecord.id == confirmed_record_id
+                    )
+                )
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
+                sql_delete_blocked = True
+        self.runner.check(
+            "Inmutabilidad bloquea ORM, UPDATE SQL y DELETE SQL confirmados",
+            orm_update_blocked
+            and sql_update_blocked
+            and sql_delete_blocked
+            and stable_hash(self.records(tracked["public_id"])) == immutable_before,
+            expected="tres bloqueos y registro idéntico",
+            actual=(orm_update_blocked, sql_update_blocked, sql_delete_blocked),
+            cause="Listeners o triggers de hechos históricos no están activos.",
+            priority="P0",
+        )
+
         replay = self.runner.request(
             self.admin,
             "POST",
@@ -1912,7 +2808,31 @@ class HistoricalImportSuite:
             priority="P0",
         )
 
-        records_before_revert = stable_hash(self.records(tracked["public_id"]))
+        logical_fields = {
+            "include_in_demand",
+            "effective_status",
+            "superseded_by_record_id",
+            "superseded_by_import_id",
+            "superseded_at",
+            "updated_at",
+            "lock_version",
+        }
+
+        def immutable_facts(rows: list[dict[str, Any]]) -> str:
+            return stable_hash(
+                [
+                    {
+                        key: value
+                        for key, value in row.items()
+                        if key not in logical_fields
+                    }
+                    for row in rows
+                ]
+            )
+
+        records_before_revert = immutable_facts(
+            self.records(tracked["public_id"])
+        )
         missing_reason = self.runner.request(
             self.admin,
             "POST",
@@ -1926,7 +2846,8 @@ class HistoricalImportSuite:
             f"/api/historical-imports/{tracked['public_id']}/revert",
             json={"reason": f"Reversión controlada {RUN_SHORT}"},
         )
-        records_after_revert = stable_hash(self.records(tracked["public_id"]))
+        rows_after_revert = self.records(tracked["public_id"])
+        records_after_revert = immutable_facts(rows_after_revert)
         second_revert = self.runner.request(
             self.admin,
             "POST",
@@ -1944,9 +2865,10 @@ class HistoricalImportSuite:
             and state_after_revert["status"] == "reverted"
             and state_after_revert["reversal_reason"]
             == f"Reversión controlada {RUN_SHORT}"
-            and records_before_revert == records_after_revert,
+            and records_before_revert == records_after_revert
+            and all(not bool(row["include_in_demand"]) for row in rows_after_revert),
             base=25,
-            expected="400; 200 lógico; replay 200; records inmutables",
+            expected="400; 200 lógico; replay 200; hechos inmutables",
             actual=(
                 missing_reason.status_code,
                 revert.status_code,
@@ -2193,6 +3115,7 @@ class HistoricalImportSuite:
                 json={},
             )
         errors = self.errors(tracked["public_id"]) if tracked else []
+        ambiguous_tracked = tracked
         self.runner.check(
             "Relación ambigua se detecta y no se elige automáticamente",
             any(
@@ -2204,6 +3127,59 @@ class HistoricalImportSuite:
             expected="related_record_ambiguous",
             actual=[issue["error_code"] for issue in errors],
             cause="_rebuild_dynamic_issues elige una venta cuando existen varias candidatas.",
+            priority="P0",
+        )
+
+        ambiguous_records = (
+            self.records(ambiguous_tracked["public_id"])
+            if ambiguous_tracked
+            else []
+        )
+        return_record = next(
+            (item for item in ambiguous_records if item["record_type"] == "return"),
+            None,
+        )
+        candidates = foreign_record = None
+        if ambiguous_tracked and return_record and self.valid_import:
+            candidates = self.runner.request(
+                self.admin,
+                "GET",
+                (
+                    f"/api/historical-imports/{ambiguous_tracked['public_id']}"
+                    f"/records/{return_record['id']}/relationship-candidates"
+                    "?page=1&per_page=1"
+                ),
+            )
+            foreign_record = self.runner.request(
+                self.admin,
+                "GET",
+                (
+                    f"/api/historical-imports/{self.valid_import['public_id']}"
+                    f"/records/{return_record['id']}/relationship-candidates"
+                ),
+            )
+            self.runner.remember_error(foreign_record)
+        candidate_payload = response_json(candidates) or {}
+        candidate_items = candidate_payload.get("items", [])
+        self.runner.check(
+            "Candidatos de relación son paginados, mínimos y del mismo lote",
+            candidates is not None
+            and candidates.status_code == 200
+            and len(candidate_items) == 1
+            and candidate_payload.get("pagination", {}).get("total") == 2
+            and set(candidate_items[0])
+            == {"id", "source_row_number", "record_type", "event_date", "quantity"}
+            and not recursive_contains_key(candidate_payload, "storage_key")
+            and not recursive_contains_key(candidate_payload, "raw_row_json")
+            and foreign_record is not None
+            and foreign_record.status_code == 404,
+            expected="1/2 candidatos allowlist y record ajeno 404",
+            actual=(
+                candidates.status_code if candidates else None,
+                candidate_payload.get("pagination"),
+                foreign_record.status_code if foreign_record else None,
+            ),
+            cause="relationship-candidates mezcla lotes o expone datos internos.",
             priority="P0",
         )
 
@@ -2241,6 +3217,45 @@ class HistoricalImportSuite:
             actual=len(duplicate_errors),
             cause="_rebuild_dynamic_issues no cuenta fingerprints fuertes repetidos.",
             priority="P0",
+        )
+
+        duplicate_filter = invalid_filter = None
+        if tracked:
+            duplicate_filter = self.runner.request(
+                self.admin,
+                "GET",
+                (
+                    f"/api/historical-imports/{tracked['public_id']}/errors"
+                    "?category=duplicate&page=1&per_page=1"
+                ),
+            )
+            invalid_filter = self.runner.request(
+                self.admin,
+                "GET",
+                f"/api/historical-imports/{tracked['public_id']}/errors?category=otro",
+            )
+            self.runner.remember_error(invalid_filter)
+        duplicate_payload = response_json(duplicate_filter) or {}
+        filtered_items = duplicate_payload.get("items", [])
+        self.runner.check(
+            "Filtro duplicate pagina solo hallazgos de duplicidad y valida categoría",
+            duplicate_filter is not None
+            and duplicate_filter.status_code == 200
+            and len(filtered_items) == 1
+            and duplicate_payload.get("pagination", {}).get("total") == 2
+            and all(
+                "duplicate" in str(item.get("code", ""))
+                for item in filtered_items
+            )
+            and invalid_filter is not None
+            and invalid_filter.status_code == 400,
+            expected="1/2 duplicate; categoría inválida 400",
+            actual=(
+                duplicate_payload.get("pagination"),
+                invalid_filter.status_code if invalid_filter else None,
+            ),
+            cause="list_errors no aplica category=duplicate de forma segura.",
+            priority="P1",
         )
 
     def inactive_product_check(self) -> None:
@@ -2665,6 +3680,150 @@ class HistoricalImportSuite:
             priority="P0",
         )
 
+        # Cadena entre lotes: el lote fuente no puede revertirse mientras una
+        # corrección confirmada dependa de él. Al revertir la corrección se
+        # restaura el hecho previo sin borrar ninguna de las dos filas.
+        cross_document = f"DOC-{RUN_SHORT}-CROSS-REVERT"
+        source_path = csv_file(
+            self.artifacts,
+            "correction_source_batch",
+            [
+                self.row(
+                    quantity="5",
+                    document_number=cross_document,
+                    source_record_id=f"REC-{RUN_SHORT}-CROSS-SOURCE",
+                    source_line_id="S",
+                )
+            ],
+        )
+        _, _, source_batch = self.upload_path(
+            self.admin, source_path, tag="correction_source_batch"
+        )
+        source_confirm = None
+        if source_batch:
+            self.runner.request(
+                self.admin,
+                "POST",
+                f"/api/historical-imports/{source_batch['public_id']}/preview",
+                json={},
+            )
+            source_dry = self.runner.request(
+                self.admin,
+                "POST",
+                f"/api/historical-imports/{source_batch['public_id']}/dry-run",
+            )
+            source_token = (response_json(source_dry) or {}).get(
+                "confirmation_token"
+            )
+            if isinstance(source_token, str):
+                source_confirm = self.runner.request(
+                    self.admin,
+                    "POST",
+                    f"/api/historical-imports/{source_batch['public_id']}/confirm",
+                    json={"confirmation_token": source_token},
+                )
+
+        correction_path = csv_file(
+            self.artifacts,
+            "correction_dependent_batch",
+            [
+                self.row(
+                    quantity="7",
+                    record_type="correction",
+                    document_number=cross_document,
+                    source_record_id=f"REC-{RUN_SHORT}-CROSS-CORRECTION",
+                    source_line_id="C",
+                )
+            ],
+        )
+        _, _, correction_batch = self.upload_path(
+            self.admin, correction_path, tag="correction_dependent_batch"
+        )
+        correction_confirm = blocked_source_revert = correction_revert = None
+        final_source_revert = None
+        if correction_batch:
+            self.runner.request(
+                self.admin,
+                "POST",
+                f"/api/historical-imports/{correction_batch['public_id']}/preview",
+                json={},
+            )
+            correction_dry = self.runner.request(
+                self.admin,
+                "POST",
+                f"/api/historical-imports/{correction_batch['public_id']}/dry-run",
+            )
+            correction_token = (response_json(correction_dry) or {}).get(
+                "confirmation_token"
+            )
+            if isinstance(correction_token, str):
+                correction_confirm = self.runner.request(
+                    self.admin,
+                    "POST",
+                    f"/api/historical-imports/{correction_batch['public_id']}/confirm",
+                    json={"confirmation_token": correction_token},
+                )
+        if source_batch and correction_confirm is not None:
+            blocked_source_revert = self.runner.request(
+                self.admin,
+                "POST",
+                f"/api/historical-imports/{source_batch['public_id']}/revert",
+                json={"reason": "Debe bloquearse por dependencia"},
+            )
+            self.runner.remember_error(blocked_source_revert)
+        if correction_batch and correction_confirm is not None:
+            correction_revert = self.runner.request(
+                self.admin,
+                "POST",
+                f"/api/historical-imports/{correction_batch['public_id']}/revert",
+                json={"reason": "Restaurar versión histórica anterior"},
+            )
+
+        source_rows_after_restore = (
+            self.records(source_batch["public_id"]) if source_batch else []
+        )
+        correction_rows_after_revert = (
+            self.records(correction_batch["public_id"])
+            if correction_batch
+            else []
+        )
+        if source_batch and correction_revert is not None:
+            final_source_revert = self.runner.request(
+                self.admin,
+                "POST",
+                f"/api/historical-imports/{source_batch['public_id']}/revert",
+                json={"reason": "Dependencia ya revertida"},
+            )
+        self.runner.check(
+            "Revertir corrección entre lotes restaura origen y respeta dependencias",
+            source_confirm is not None
+            and source_confirm.status_code == 200
+            and correction_confirm is not None
+            and correction_confirm.status_code == 200
+            and blocked_source_revert is not None
+            and blocked_source_revert.status_code == 409
+            and correction_revert is not None
+            and correction_revert.status_code == 200
+            and len(source_rows_after_restore) == 1
+            and source_rows_after_restore[0]["effective_status"] == "issued"
+            and source_rows_after_restore[0]["include_in_demand"] is True
+            and source_rows_after_restore[0]["superseded_by_record_id"] is None
+            and len(correction_rows_after_revert) == 1
+            and correction_rows_after_revert[0]["include_in_demand"] is False
+            and final_source_revert is not None
+            and final_source_revert.status_code == 200,
+            expected="409 en origen dependiente; restauración; luego revert 200",
+            actual=(
+                source_confirm.status_code if source_confirm else None,
+                correction_confirm.status_code if correction_confirm else None,
+                blocked_source_revert.status_code if blocked_source_revert else None,
+                correction_revert.status_code if correction_revert else None,
+                final_source_revert.status_code if final_source_revert else None,
+            ),
+            cause="revert_import no restaura o no protege la cadena de correcciones.",
+            priority="P0",
+        )
+
         negative_doc = f"DOC-{RUN_SHORT}-NEGNET"
         negative_path = csv_file(
             self.artifacts,
@@ -2859,23 +4018,21 @@ class HistoricalImportSuite:
         before_state = self.import_state(tracked["public_id"])
         before_records = stable_hash(self.records(tracked["public_id"]))
 
-        test_app = create_app()
-        test_app.config.update(TESTING=False, PROPAGATE_EXCEPTIONS=False)
-        previous_disabled = test_app.logger.disabled
-        test_app.logger.disabled = True
-        with test_app.test_client() as client:
-            with client.session_transaction() as flask_session:
-                flask_session["_user_id"] = str(self.admin_user_id)
-                flask_session["_fresh"] = True
+        previous_disabled = self.app.logger.disabled
+        self.app.logger.disabled = True
+        try:
             with mock.patch(
                 "sqlalchemy.orm.session.Session.commit",
                 side_effect=RuntimeError("controlled-confirmation-failure"),
             ):
-                response_500 = client.post(
+                response_500 = self.runner.request(
+                    self.admin,
+                    "POST",
                     f"/api/historical-imports/{tracked['public_id']}/confirm",
                     json={"confirmation_token": second_token},
                 )
-        test_app.logger.disabled = previous_disabled
+        finally:
+            self.app.logger.disabled = previous_disabled
         self.runner.remember_error(response_500)
         after_state = self.import_state(tracked["public_id"])
         after_records = stable_hash(self.records(tracked["public_id"]))
@@ -3093,6 +4250,12 @@ class HistoricalImportSuite:
                 {"approve": []},
                 False,
             ),
+            (
+                "GET",
+                f"/{public_id}/records/{record_id}/relationship-candidates",
+                None,
+                False,
+            ),
             ("GET", f"/{public_id}/errors.csv", None, True),
         ]
         inventory_statuses = []
@@ -3139,7 +4302,7 @@ class HistoricalImportSuite:
         self.runner.check(
             "Permisos por endpoint: vendedor 403 en todo el módulo",
             all(status == 403 for status in seller_statuses),
-            expected="12 respuestas 403",
+            expected=f"{len(matrix)} respuestas 403",
             actual=seller_statuses,
             cause="ROLE_VENDEDOR recibió permisos históricos no autorizados.",
             priority="P0",
@@ -3147,7 +4310,7 @@ class HistoricalImportSuite:
         self.runner.check(
             "Permisos por endpoint: sin sesión 401 JSON",
             all(status == 401 for status in anonymous_statuses),
-            expected="12 respuestas 401",
+            expected=f"{len(matrix)} respuestas 401",
             actual=anonymous_statuses,
             cause="Decoradores históricos no exigen autenticación antes del contrato.",
             priority="P0",
@@ -3279,6 +4442,15 @@ class HistoricalImportSuite:
                 self.artifacts.created_public_ids.add(item.public_id)
                 self.artifacts.tracked_storage_keys.add(item.storage_key)
             if import_ids:
+                # Exclusivamente en la SQLite temporal: se desarma el guard de
+                # lote confirmado/revertido para poder retirar fixtures propias.
+                HistoricalImport.query.filter(
+                    HistoricalImport.id.in_(import_ids)
+                ).update(
+                    {HistoricalImport.status: "uploaded"},
+                    synchronize_session=False,
+                )
+                db.session.flush()
                 record_ids = [
                     value
                     for (value,) in db.session.query(HistoricalDemandRecord.id)
@@ -3347,7 +4519,8 @@ class HistoricalImportSuite:
         final_api = self.api_snapshot(self.admin) if self.admin else {}
 
         no_temp_files = (
-            not self.artifacts.root.exists()
+            self.artifacts.root.exists()
+            and all(not path.exists() for path in self.artifacts.created_temp_files)
             and self.artifacts.deleted_temp_files
             == len(self.artifacts.created_temp_files)
         )
@@ -3407,6 +4580,21 @@ class HistoricalImportSuite:
             )
 
     def execute(self) -> int:
+        self.initialize_isolated_database()
+        self.runner.check(
+            "Runtime fail-closed usa SQLite e instance_path bajo tempfile",
+            self.artifacts.database_path.exists()
+            and Path(self.app.instance_path).resolve()
+            == self.artifacts.instance_path.resolve(),
+            expected="DB e instance_path temporales",
+            actual=(
+                self.artifacts.database_path.exists(),
+                Path(self.app.instance_path).resolve()
+                == self.artifacts.instance_path.resolve(),
+            ),
+            cause="La factory aislada no quedó confinada al tempfile.",
+            priority="P0",
+        )
         self.ensure_server()
         self.inspect_prerequisites()
         if self.active_product is None or self.admin_user_id is None:
@@ -3428,12 +4616,15 @@ class HistoricalImportSuite:
         self.static_contract_checks()
         self.access_checks_before_data()
 
-        self.admin = self.login(ADMIN_IDENTIFIER, ADMIN_PASSWORD, "admin")
+        admin_identifier, admin_password = self.credentials[ROLE_ADMIN]
+        inventory_identifier, inventory_password = self.credentials[ROLE_INVENTARIO]
+        seller_identifier, seller_password = self.credentials[ROLE_VENDEDOR]
+        self.admin = self.login(admin_identifier, admin_password, "admin efímero")
         self.inventory = self.login(
-            INVENTORY_IDENTIFIER, INVENTORY_PASSWORD, "inventario"
+            inventory_identifier, inventory_password, "inventario efímero"
         )
         self.seller = self.login(
-            SELLER_IDENTIFIER, SELLER_PASSWORD, "vendedor"
+            seller_identifier, seller_password, "vendedor efímero"
         )
         self.initial_api = self.api_snapshot(self.admin)
         print("--- SNAPSHOT INICIAL API ---")
@@ -3442,6 +4633,7 @@ class HistoricalImportSuite:
                 f"{path}: status={value['status']} hash={value['payload_hash']}"
             )
 
+        self.csrf_contract_checks()
         self.page_role_checks()
         self.template_check()
         self.invalid_upload_checks()
@@ -3513,8 +4705,8 @@ def print_report(runner: Runner, artifacts: ArtifactTracker) -> None:
         f"{artifacts.created_historical_rows} / "
         f"{artifacts.deleted_historical_rows}"
     )
-    print("Tablas operativas creadas/modificadas por la suite: 0")
-    print("Productos/categorías/usuarios/notas/movimientos TEST creados: 0")
+    print("Tablas/fixtures operativas: solo dentro de SQLite temporal desechable")
+    print("Base real, servidor externo y .env usados por la suite: 0")
     if runner.defects:
         print("\nDEFECTOS DETECTADOS (producción no modificada):")
         for defect in runner.defects:
@@ -3535,9 +4727,10 @@ def print_report(runner: Runner, artifacts: ArtifactTracker) -> None:
 def main() -> int:
     runner = Runner()
     artifacts = ArtifactTracker()
-    suite = HistoricalImportSuite(runner, artifacts)
+    suite: HistoricalImportSuite | None = None
     fatal_error = False
     try:
+        suite = HistoricalImportSuite(runner, artifacts)
         suite.execute()
     except Exception as exc:
         fatal_error = True
@@ -3547,37 +4740,68 @@ def main() -> int:
             expected="ejecución completa",
             actual=type(exc).__name__,
             cause=(
-                "Error de la suite o indisponibilidad de Flask/MySQL; "
+                "Error de la suite aislada Flask/SQLite; "
                 "los detalles sensibles se omitieron del log."
             ),
             priority="P0",
         )
     finally:
-        try:
-            suite.cleanup_historical()
-        except Exception as exc:
-            runner.check(
-                "Cleanup histórico en finally",
-                False,
-                expected="cleanup completo",
-                actual=type(exc).__name__,
-                cause="Falló la eliminación FK-order de filas creadas por la suite.",
-                priority="P0",
-            )
-        artifacts.cleanup_temp()
-        try:
-            if suite.initial_operational:
-                suite.final_integrity_checks()
-        except Exception as exc:
-            runner.check(
-                "Verificación final de snapshots",
-                False,
-                expected="snapshots verificables",
-                actual=type(exc).__name__,
-                cause="No fue posible leer/validar los snapshots finales.",
-                priority="P0",
-            )
-        suite.stop_server()
+        if suite is not None:
+            try:
+                suite.cleanup_historical()
+            except Exception as exc:
+                runner.check(
+                    "Cleanup histórico en finally",
+                    False,
+                    expected="cleanup completo",
+                    actual=type(exc).__name__,
+                    cause="Falló la eliminación FK-order de filas propias.",
+                    priority="P0",
+                )
+        artifacts.cleanup_temp_files()
+        if suite is not None:
+            try:
+                if suite.initial_operational:
+                    suite.final_integrity_checks()
+            except Exception as exc:
+                runner.check(
+                    "Verificación final de snapshots",
+                    False,
+                    expected="snapshots verificables",
+                    actual=type(exc).__name__,
+                    cause="No fue posible leer/validar los snapshots finales.",
+                    priority="P0",
+                )
+
+        stopped = suite is None
+        disposed = suite is None
+        if suite is not None:
+            try:
+                suite.stop_server()
+                stopped = True
+            except Exception as exc:
+                runner.check(
+                    "Servidor aislado detenido antes de borrar tempfile",
+                    False,
+                    expected="shutdown completo",
+                    actual=type(exc).__name__,
+                    cause="Werkzeug no se detuvo dentro del plazo seguro.",
+                    priority="P0",
+                )
+            try:
+                suite.dispose_database()
+                disposed = True
+            except Exception as exc:
+                runner.check(
+                    "Engine SQLite dispuesto antes de borrar tempfile",
+                    False,
+                    expected="engine.dispose completo",
+                    actual=type(exc).__name__,
+                    cause="Quedó una conexión abierta a la SQLite temporal.",
+                    priority="P0",
+                )
+        if stopped and disposed:
+            artifacts.cleanup_root()
 
     print_report(runner, artifacts)
     return 1 if fatal_error or runner.failed else 0

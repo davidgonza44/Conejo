@@ -14,14 +14,15 @@ import re
 import secrets
 import threading
 from collections import Counter, defaultdict
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from uuid import UUID, uuid4
 
 from flask import current_app
-from sqlalchemy import func, or_
+from sqlalchemy import and_, func, or_
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm.exc import StaleDataError
 
 from app.extensions import db
 from app.models import (
@@ -72,6 +73,7 @@ from app.services.historical_validation_service import (
     MAX_COLUMNS,
     MAX_FILE_BYTES,
     MAX_ROWS,
+    REQUIRED_MAPPING_FIELDS,
     HeaderValidationError,
     canonicalize_csv_row,
     has_dangerous_cell_control,
@@ -95,6 +97,34 @@ COPY_CHUNK_BYTES = 64 * 1024
 CONFIRMATION_TOKEN_TTL_MINUTES = 15
 DEFAULT_PAGE_SIZE = 25
 MAX_PAGE_SIZE = 100
+
+_MATCH_STATUSES = frozenset(
+    {
+        "pending",
+        "code_collision",
+        "inactive_review",
+        "exact",
+        "name_suggested",
+        "unmatched",
+        "manual_inactive_approved",
+        "manual_confirmed",
+    }
+)
+_DUPLICATE_ERROR_CODES = frozenset(
+    {
+        "strong_duplicate_in_file",
+        "strong_duplicate_existing",
+        "weak_possible_duplicate",
+    }
+)
+_PRODUCT_MATCH_ISSUE_CODES = frozenset(
+    {
+        "product_code_collision",
+        "product_unmatched",
+        "product_name_suggestion",
+        "product_inactive",
+    }
+)
 
 _STORAGE_KEY_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.csv$"
@@ -228,7 +258,7 @@ def _copy_upload_to_private(stream) -> tuple[str, Path, str, int]:
     return storage_key, destination, digest.hexdigest(), total
 
 
-def _inspect_csv_structure(path: Path) -> dict[str, int]:
+def _inspect_csv_structure(path: Path) -> dict[str, object]:
     """Escaneo streaming de límites estructurales, sin validar negocio."""
     with _CSV_LIMIT_LOCK:
         previous_limit = csv.field_size_limit()
@@ -245,7 +275,12 @@ def _inspect_csv_structure(path: Path) -> dict[str, int]:
                     headers = next(reader)
                 except StopIteration as exc:
                     raise _api_error("El CSV no contiene encabezados.", 422) from exc
-                validate_headers(headers)
+                clean_headers = validate_headers(headers)
+                if len(clean_headers) < len(REQUIRED_MAPPING_FIELDS):
+                    raise HeaderValidationError(
+                        "El CSV no usa el delimitador punto y coma o no contiene "
+                        "las columnas mínimas requeridas."
+                    )
 
                 row_count = 0
                 for row in reader:
@@ -253,6 +288,14 @@ def _inspect_csv_structure(path: Path) -> dict[str, int]:
                     if row_count > MAX_ROWS:
                         raise _api_error(
                             f"El CSV excede el máximo de {MAX_ROWS} filas.", 413
+                        )
+                    if not row:
+                        continue
+                    if len(row) != len(clean_headers):
+                        raise _api_error(
+                            "Una fila no tiene la misma cantidad de columnas que "
+                            "el encabezado; verifique el delimitador punto y coma.",
+                            422,
                         )
                     if len(row) > MAX_COLUMNS:
                         raise _api_error(
@@ -264,7 +307,14 @@ def _inspect_csv_structure(path: Path) -> dict[str, int]:
                             f"Una celda excede el máximo de {MAX_CELL_CHARS} caracteres.",
                             422,
                         )
-                return {"structural_rows": row_count, "column_count": len(headers)}
+                # Se persisten exclusivamente los encabezados ya validados. Esto
+                # permite reconstruir el mapping explícito tras recargar la UI
+                # sin volver a exponer ni leer el archivo privado desde el cliente.
+                return {
+                    "structural_rows": row_count,
+                    "column_count": len(clean_headers),
+                    "headers": clean_headers,
+                }
         except csv.Error as exc:
             raise _api_error(
                 "El CSV está mal formado o una celda excede el límite permitido.",
@@ -316,10 +366,13 @@ def upload_import(
             storage_key=storage_key,
             file_size_bytes=size,
             sha256=file_hash,
+            file_format="csv",
             source_system=normalized_source,
             document_type=normalized_document_type,
             file_encoding=CSV_ENCODING,
             delimiter=CSV_DELIMITER,
+            period_start=date(2025, 1, 1),
+            period_end=date(2025, 12, 31),
             schema_version="historical-csv-v1",
             mapping_version="mapping-v1",
             validation_version="validation-v1",
@@ -413,8 +466,13 @@ def _issue_mapping(
         "error_code": error_code,
         "severity": severity,
         "message": message,
+        # Nunca se persiste el valor fuente dentro del hallazgo. Si una versión
+        # futura necesita contexto, deberá ser una representación redactada.
+        "redacted_value": None,
         "resolution_status": resolution_status,
+        "resolved": resolution_status == RESOLUTION_RESOLVED,
         "resolution_action": resolution_action if resolved else None,
+        "resolution_note": None,
         "resolved_by_user_id": resolved_by_user_id if resolved else None,
         "resolved_at": resolved_at if resolved else None,
     }
@@ -727,9 +785,10 @@ def _rebuild_dynamic_issues(historical_import: HistoricalImport) -> None:
             historical_import_id=historical_import.id
         )
         .order_by(HistoricalDemandRecord.source_row_number.asc())
+        .populate_existing()
         .all()
     )
-    products = Product.query.order_by(Product.id.asc()).all()
+    products = Product.query.order_by(Product.id.asc()).populate_existing().all()
     product_by_id = {product.id: product for product in products}
     indexes = build_product_indexes(products)
     issues: list[dict] = []
@@ -755,6 +814,29 @@ def _rebuild_dynamic_issues(historical_import: HistoricalImport) -> None:
             "manual_name_admin",
             "manual_exact_admin",
         }
+        if manually_selected and record.product_id in product_by_id:
+            selected_product = product_by_id[record.product_id]
+            selected_code_matches = (
+                normalize_code(selected_product.code)
+                == record.product_code_normalized
+            )
+            selected_name_matches = bool(
+                record.product_name_normalized
+                and normalize_name(selected_product.name)
+                == record.product_name_normalized
+            )
+            selection_still_valid = (
+                record.match_method == "manual_exact_admin"
+                and selected_code_matches
+            ) or (
+                record.match_method == "manual_name_admin"
+                and selected_name_matches
+            )
+            if not selection_still_valid:
+                flags["manual_match"] = False
+                flags["inactive_product"] = False
+                record.review_flags_json = flags
+                manually_selected = False
         if manually_selected and record.product_id in product_by_id:
             product = product_by_id[record.product_id]
             record.match_status = (
@@ -1204,6 +1286,103 @@ def _rebuild_dynamic_issues(historical_import: HistoricalImport) -> None:
                     )
                 )
 
+    # Revisión de demanda neta por producto y mes institucional. Las fechas son
+    # Date (sin hora) y el período autorizado es exclusivamente 2025, por lo que
+    # no existe conversión ambigua de zona horaria en esta versión.
+    product_ids = sorted({record.product_id for record in records if record.product_id})
+    projected_superseded_ids = {
+        record.related_record_id
+        for record in records
+        if record.record_type == RECORD_TYPE_CORRECTION
+        and record.record_status in ACTIVE_RECORD_STATUSES
+        and record.related_record_id
+    }
+    period_totals: dict[tuple[int, int, int], Decimal] = defaultdict(
+        lambda: Decimal("0.00")
+    )
+
+    def demand_delta(record: HistoricalDemandRecord) -> Decimal:
+        amount = Decimal(record.quantity)
+        if record.record_type in (RECORD_TYPE_RETURN, RECORD_TYPE_CANCELLATION):
+            return -amount
+        return amount
+
+    if product_ids:
+        for id_chunk in _chunks(product_ids):
+            existing_period_records = (
+                HistoricalDemandRecord.query.join(
+                    HistoricalImport,
+                    HistoricalImport.id
+                    == HistoricalDemandRecord.historical_import_id,
+                )
+                .filter(
+                    HistoricalImport.status == IMPORT_STATUS_CONFIRMED,
+                    HistoricalDemandRecord.product_id.in_(id_chunk),
+                    HistoricalDemandRecord.include_in_demand.is_(True),
+                    HistoricalDemandRecord.effective_status.in_(
+                        ACTIVE_RECORD_STATUSES
+                    ),
+                )
+                .all()
+            )
+            for existing in existing_period_records:
+                if existing.id in projected_superseded_ids:
+                    continue
+                key = (
+                    existing.product_id,
+                    existing.event_date.year,
+                    existing.event_date.month,
+                )
+                period_totals[key] += demand_delta(existing)
+
+    staged_by_period: dict[
+        tuple[int, int, int], list[HistoricalDemandRecord]
+    ] = defaultdict(list)
+    for record in records:
+        if (
+            record.product_id is None
+            or record.record_status not in ACTIVE_RECORD_STATUSES
+            or record.id in projected_superseded_ids
+        ):
+            continue
+        key = (record.product_id, record.event_date.year, record.event_date.month)
+        period_totals[key] += demand_delta(record)
+        staged_by_period[key].append(record)
+
+    already_flagged_negative = {
+        issue.get("historical_demand_record_id")
+        for issue in issues
+        if issue.get("error_code") == "negative_net_demand"
+    }
+    for key, staged_period_records in staged_by_period.items():
+        if period_totals[key] >= Decimal("0.00"):
+            continue
+        candidates = sorted(
+            staged_period_records,
+            key=lambda item: (
+                item.record_type
+                not in (RECORD_TYPE_RETURN, RECORD_TYPE_CANCELLATION),
+                item.source_row_number,
+            ),
+        )
+        review_record = candidates[0]
+        if review_record.id in already_flagged_negative:
+            continue
+        issues.append(
+            _resolved_review_issue(
+                historical_import,
+                review_record,
+                field_name="quantity",
+                error_code="negative_net_demand",
+                message=(
+                    "La demanda neta mensual del producto quedaría negativa y "
+                    "requiere revisión administrativa explícita."
+                ),
+                flag="negative_net",
+                action="admin_accepted_negative_net",
+            )
+        )
+
     db.session.flush()
     if issues:
         _bulk_insert(HistoricalImportError, issues)
@@ -1213,6 +1392,33 @@ def _rebuild_dynamic_issues(historical_import: HistoricalImport) -> None:
 def _refresh_counters(
     historical_import: HistoricalImport, *, total_rows: int | None = None
 ) -> None:
+    def distinct_issue_rows(severity: str, *, unresolved_only: bool) -> int:
+        filters = [
+            HistoricalImportError.historical_import_id == historical_import.id,
+            HistoricalImportError.severity == severity,
+        ]
+        if unresolved_only:
+            filters.append(
+                HistoricalImportError.resolution_status != RESOLUTION_RESOLVED
+            )
+        row_count = (
+            db.session.query(
+                func.count(func.distinct(HistoricalImportError.source_row_number))
+            )
+            .filter(*filters, HistoricalImportError.source_row_number.isnot(None))
+            .scalar()
+            or 0
+        )
+        # Un hallazgo global (por ejemplo una colisión de códigos operativos)
+        # se representa como una sola unidad, aunque no pertenezca a una fila.
+        has_global = (
+            db.session.query(HistoricalImportError.id)
+            .filter(*filters, HistoricalImportError.source_row_number.is_(None))
+            .first()
+            is not None
+        )
+        return int(row_count) + int(has_global)
+
     if total_rows is not None:
         historical_import.total_rows = total_rows
     historical_import.valid_rows = (
@@ -1223,31 +1429,21 @@ def _refresh_counters(
         .scalar()
         or 0
     )
-    historical_import.error_count = (
-        db.session.query(func.count(HistoricalImportError.id))
-        .filter(
-            HistoricalImportError.historical_import_id == historical_import.id,
-            HistoricalImportError.severity == SEVERITY_ERROR,
-            HistoricalImportError.resolution_status != RESOLUTION_RESOLVED,
-        )
-        .scalar()
-        or 0
+    historical_import.error_count = distinct_issue_rows(
+        SEVERITY_ERROR, unresolved_only=True
     )
-    historical_import.warning_count = (
-        db.session.query(func.count(HistoricalImportError.id))
-        .filter(
-            HistoricalImportError.historical_import_id == historical_import.id,
-            HistoricalImportError.severity == SEVERITY_WARNING,
-        )
-        .scalar()
-        or 0
+    historical_import.warning_count = distinct_issue_rows(
+        SEVERITY_WARNING, unresolved_only=False
     )
     historical_import.review_count = (
-        db.session.query(func.count(HistoricalImportError.id))
+        db.session.query(
+            func.count(func.distinct(HistoricalImportError.source_row_number))
+        )
         .filter(
             HistoricalImportError.historical_import_id == historical_import.id,
-            HistoricalImportError.severity == SEVERITY_REVIEW,
+            HistoricalImportError.error_code.in_(_PRODUCT_MATCH_ISSUE_CODES),
             HistoricalImportError.resolution_status != RESOLUTION_RESOLVED,
+            HistoricalImportError.source_row_number.isnot(None),
         )
         .scalar()
         or 0
@@ -1314,6 +1510,11 @@ def preview_import(
         historical_import.lock_version += 1
         db.session.commit()
         return historical_import
+    except StaleDataError as exc:
+        db.session.rollback()
+        raise ConflictError(
+            "El lote cambió concurrentemente; vuelva a cargar y reintente."
+        ) from exc
     except Exception:
         db.session.rollback()
         raise
@@ -1388,23 +1589,49 @@ def _verify_staged_records(
                         fingerprint.value,
                         fingerprint.strength,
                         parsed.values["event_date"],
+                        parsed.values["product_code_original"],
                         parsed.values["product_code_normalized"],
+                        parsed.values["product_name_original"],
+                        parsed.values["product_name_normalized"],
                         Decimal(parsed.values["quantity"]),
+                        (
+                            Decimal(parsed.values["unit_price"])
+                            if parsed.values["unit_price"] is not None
+                            else None
+                        ),
                         parsed.values["record_type"],
                         parsed.values["record_status"],
+                        parsed.values["document_number_original"],
                         parsed.values["document_number_normalized"],
+                        parsed.values["source_record_id_original"],
+                        parsed.values["source_record_id_normalized"],
+                        parsed.values["source_line_id_original"],
                         parsed.values["source_line_id_normalized"],
+                        parsed.raw_row,
                     )
                     actual = (
                         record.fingerprint,
                         record.fingerprint_strength,
                         record.event_date,
+                        record.product_code_original,
                         record.product_code_normalized,
+                        record.product_name_original,
+                        record.product_name_normalized,
                         Decimal(record.quantity),
+                        (
+                            Decimal(record.unit_price)
+                            if record.unit_price is not None
+                            else None
+                        ),
                         record.record_type,
                         record.record_status,
+                        record.document_number_original,
                         record.document_number_normalized,
+                        record.source_record_id_original,
+                        record.source_record_id_normalized,
+                        record.source_line_id_original,
                         record.source_line_id_normalized,
+                        record.raw_row_json,
                     )
                     if expected != actual:
                         raise ConflictError(
@@ -1474,11 +1701,35 @@ def _dry_run_summary(historical_import: HistoricalImport) -> dict:
         - totals[RECORD_TYPE_RETURN]
         - totals[RECORD_TYPE_CANCELLATION]
     )
+    unresolved_reviews = (
+        db.session.query(func.count(HistoricalImportError.id))
+        .filter(
+            HistoricalImportError.historical_import_id == historical_import.id,
+            HistoricalImportError.severity == SEVERITY_REVIEW,
+            HistoricalImportError.resolution_status != RESOLUTION_RESOLVED,
+        )
+        .scalar()
+        or 0
+    )
+    possible_duplicates = (
+        db.session.query(
+            func.count(func.distinct(HistoricalImportError.source_row_number))
+        )
+        .filter(
+            HistoricalImportError.historical_import_id == historical_import.id,
+            HistoricalImportError.error_code.in_(_DUPLICATE_ERROR_CODES),
+            HistoricalImportError.source_row_number.isnot(None),
+        )
+        .scalar()
+        or 0
+    )
     return {
         "rows": historical_import.total_rows,
         "valid_rows": historical_import.valid_rows,
         "warnings": historical_import.warning_count,
-        "unresolved_reviews": historical_import.review_count,
+        "unresolved_reviews": unresolved_reviews,
+        "pending_matches": historical_import.review_count,
+        "possible_duplicates": possible_duplicates,
         "errors": historical_import.error_count,
         "matched": historical_import.matched_count,
         "unmatched": historical_import.unmatched_count,
@@ -1540,6 +1791,11 @@ def dry_run_import(
         historical_import.lock_version += 1
         db.session.commit()
         return historical_import, token, summary
+    except StaleDataError as exc:
+        db.session.rollback()
+        raise ConflictError(
+            "El lote cambió concurrentemente; vuelva a cargar y reintente."
+        ) from exc
     except ApiError:
         # Si el 422 ya se confirmó, rollback es inocuo; en los demás casos
         # garantiza que no queden cambios parciales en la sesión.
@@ -1557,6 +1813,122 @@ def _validate_confirmation_token(token: object) -> tuple[str, str]:
     if not candidate or len(candidate) > 200:
         raise ValidationError("El token de confirmación no es válido.")
     return candidate, hashlib.sha256(candidate.encode("utf-8")).hexdigest()
+
+
+def _lock_confirmation_dependencies(
+    historical_import: HistoricalImport,
+) -> tuple[list[HistoricalDemandRecord], dict[int, HistoricalDemandRecord]]:
+    """Bloquea, en orden estable, todo estado que afecta una confirmación.
+
+    Además del lote se bloquean productos, lotes fuente y registros candidatos.
+    Así dos confirmaciones no pueden consumir simultáneamente la misma venta
+    ni superseder el mismo registro usando una validación obsoleta.
+    """
+    # Matching y la detección de colisiones dependen del catálogo completo.
+    db.session.query(Product).order_by(Product.id.asc()).with_for_update().execution_options(
+        populate_existing=True
+    ).all()
+
+    staged_refs = (
+        db.session.query(
+            HistoricalDemandRecord.id,
+            HistoricalDemandRecord.document_number_normalized,
+            HistoricalDemandRecord.related_record_id,
+        )
+        .filter(
+            HistoricalDemandRecord.historical_import_id == historical_import.id
+        )
+        .order_by(HistoricalDemandRecord.id.asc())
+        .all()
+    )
+    staged_ids = {row.id for row in staged_refs}
+    documents = sorted(
+        {
+            row.document_number_normalized
+            for row in staged_refs
+            if row.document_number_normalized
+        }
+    )
+    external_pairs: set[tuple[int, int]] = set()
+    for document_chunk in _chunks(documents):
+        external_pairs.update(
+            (record_id, import_id)
+            for record_id, import_id in (
+                db.session.query(
+                    HistoricalDemandRecord.id,
+                    HistoricalDemandRecord.historical_import_id,
+                )
+                .join(
+                    HistoricalImport,
+                    HistoricalImport.id
+                    == HistoricalDemandRecord.historical_import_id,
+                )
+                .filter(
+                    HistoricalDemandRecord.historical_import_id
+                    != historical_import.id,
+                    HistoricalImport.status == IMPORT_STATUS_CONFIRMED,
+                    HistoricalDemandRecord.document_number_normalized.in_(
+                        document_chunk
+                    ),
+                    HistoricalDemandRecord.record_type.in_(
+                        (RECORD_TYPE_SALE, RECORD_TYPE_CORRECTION)
+                    ),
+                    HistoricalDemandRecord.effective_status.in_(
+                        ACTIVE_RECORD_STATUSES
+                    ),
+                    HistoricalDemandRecord.superseded_by_record_id.is_(None),
+                )
+                .all()
+            )
+        )
+
+    explicit_related_ids = {
+        row.related_record_id
+        for row in staged_refs
+        if row.related_record_id and row.related_record_id not in staged_ids
+    }
+    if explicit_related_ids:
+        external_pairs.update(
+            (record_id, import_id)
+            for record_id, import_id in db.session.query(
+                HistoricalDemandRecord.id,
+                HistoricalDemandRecord.historical_import_id,
+            )
+            .filter(HistoricalDemandRecord.id.in_(explicit_related_ids))
+            .all()
+        )
+
+    external_import_ids = sorted({import_id for _, import_id in external_pairs})
+    if external_import_ids:
+        db.session.query(HistoricalImport).filter(
+            HistoricalImport.id.in_(external_import_ids)
+        ).order_by(HistoricalImport.id.asc()).with_for_update().execution_options(
+            populate_existing=True
+        ).all()
+
+    all_record_ids = sorted(staged_ids | {record_id for record_id, _ in external_pairs})
+    locked_records: dict[int, HistoricalDemandRecord] = {}
+    for id_chunk in _chunks(all_record_ids):
+        for record in (
+            db.session.query(HistoricalDemandRecord)
+            .filter(HistoricalDemandRecord.id.in_(id_chunk))
+            .order_by(HistoricalDemandRecord.id.asc())
+            .with_for_update()
+            .execution_options(populate_existing=True)
+            .all()
+        ):
+            locked_records[record.id] = record
+
+    staged = sorted(
+        (locked_records[record_id] for record_id in staged_ids),
+        key=lambda item: item.source_row_number,
+    )
+    related = {
+        record_id: record
+        for record_id, record in locked_records.items()
+        if record_id not in staged_ids
+    }
+    return staged, related
 
 
 def confirm_import(
@@ -1600,6 +1972,7 @@ def confirm_import(
 
     try:
         path = _verify_private_file(historical_import)
+        records, locked_related = _lock_confirmation_dependencies(historical_import)
         _verify_staged_records(historical_import, path)
         _rebuild_dynamic_issues(historical_import)
         _refresh_counters(historical_import)
@@ -1616,41 +1989,19 @@ def confirm_import(
                 422,
             )
 
-        records = (
-            HistoricalDemandRecord.query.filter_by(
-                historical_import_id=historical_import.id
-            )
-            .order_by(HistoricalDemandRecord.source_row_number.asc())
-            .all()
-        )
         if not records:
             raise _api_error("El lote no contiene filas válidas para confirmar.", 422)
-
-        related_ids = sorted(
-            {
-                record.related_record_id
-                for record in records
-                if record.related_record_id
-            }
-        )
-        locked_related: dict[int, HistoricalDemandRecord] = {}
-        if related_ids:
-            locked_related = {
-                record.id: record
-                for record in db.session.query(HistoricalDemandRecord)
-                .filter(HistoricalDemandRecord.id.in_(related_ids))
-                .order_by(HistoricalDemandRecord.id.asc())
-                .with_for_update()
-                .all()
-            }
 
         now = datetime.utcnow()
         record_by_id = {record.id: record for record in records}
         for record in records:
             if record.product_id is None:
                 raise ConflictError("Una fila perdió su enlace de producto.")
+            product = db.session.get(Product, record.product_id)
+            if product is None:
+                raise ConflictError("Una fila apunta a un producto inexistente.")
             flags = _record_flags(record)
-            if record.product is not None and not record.product.is_active:
+            if not product.is_active:
                 if not flags.get("inactive_product"):
                     raise ConflictError(
                         "Un producto inactivo no tiene aprobación administrativa."
@@ -1698,10 +2049,10 @@ def confirm_import(
         historical_import.lock_version += 1
         db.session.commit()
         return historical_import, False
-    except IntegrityError as exc:
+    except (IntegrityError, StaleDataError) as exc:
         db.session.rollback()
         raise ConflictError(
-            "Otra confirmación concurrente registró uno de los fingerprints."
+            "Otra confirmación concurrente cambió el lote o uno de sus fingerprints."
         ) from exc
     except ApiError:
         db.session.rollback()
@@ -1735,13 +2086,132 @@ def revert_import(
         db.session.rollback()
         raise ConflictError("Solo un lote confirmado puede revertirse.")
 
-    historical_import.status = IMPORT_STATUS_REVERTED
-    historical_import.reversal_reason = safe_reason
-    historical_import.reverted_by_user_id = actor_user_id
-    historical_import.reverted_at = datetime.utcnow()
-    historical_import.lock_version += 1
-    db.session.commit()
-    return historical_import, False
+    try:
+        own_records = (
+            db.session.query(HistoricalDemandRecord)
+            .filter(
+                HistoricalDemandRecord.historical_import_id
+                == historical_import.id
+            )
+            .order_by(HistoricalDemandRecord.id.asc())
+            .with_for_update()
+            .execution_options(populate_existing=True)
+            .all()
+        )
+        own_ids = {record.id for record in own_records}
+
+        # No se puede revertir un origen que todavía sostiene devoluciones,
+        # anulaciones o correcciones de otro lote confirmado.
+        if own_ids:
+            dependent = (
+                db.session.query(HistoricalDemandRecord.id)
+                .join(
+                    HistoricalImport,
+                    HistoricalImport.id
+                    == HistoricalDemandRecord.historical_import_id,
+                )
+                .filter(
+                    HistoricalDemandRecord.historical_import_id
+                    != historical_import.id,
+                    HistoricalImport.status == IMPORT_STATUS_CONFIRMED,
+                    HistoricalDemandRecord.related_record_id.in_(own_ids),
+                )
+                .first()
+            )
+            if dependent is not None:
+                raise ConflictError(
+                    "El lote tiene registros relacionados en otro lote confirmado; "
+                    "revierta primero el lote dependiente."
+                )
+
+        target_refs = (
+            db.session.query(
+                HistoricalDemandRecord.id,
+                HistoricalDemandRecord.historical_import_id,
+            )
+            .filter(
+                HistoricalDemandRecord.superseded_by_import_id
+                == historical_import.id
+            )
+            .order_by(HistoricalDemandRecord.id.asc())
+            .all()
+        )
+        target_import_ids = sorted(
+            {
+                import_id
+                for _, import_id in target_refs
+                if import_id != historical_import.id
+            }
+        )
+        target_imports: dict[int, HistoricalImport] = {}
+        if target_import_ids:
+            target_imports = {
+                item.id: item
+                for item in db.session.query(HistoricalImport)
+                .filter(HistoricalImport.id.in_(target_import_ids))
+                .order_by(HistoricalImport.id.asc())
+                .with_for_update()
+                .execution_options(populate_existing=True)
+                .all()
+            }
+
+        target_ids = [record_id for record_id, _ in target_refs]
+        targets: list[HistoricalDemandRecord] = []
+        for id_chunk in _chunks(target_ids):
+            targets.extend(
+                db.session.query(HistoricalDemandRecord)
+                .filter(HistoricalDemandRecord.id.in_(id_chunk))
+                .order_by(HistoricalDemandRecord.id.asc())
+                .with_for_update()
+                .execution_options(populate_existing=True)
+                .all()
+            )
+
+        for target in targets:
+            if (
+                target.superseded_by_record_id not in own_ids
+                or target.superseded_by_import_id != historical_import.id
+            ):
+                raise ConflictError(
+                    "La cadena de corrección cambió durante la reversión."
+                )
+            target.superseded_by_record_id = None
+            target.superseded_by_import_id = None
+            target.superseded_at = None
+            target.effective_status = target.record_status
+            if target.historical_import_id == historical_import.id:
+                target.include_in_demand = False
+            else:
+                source_batch = target_imports.get(target.historical_import_id)
+                target.include_in_demand = bool(
+                    source_batch
+                    and source_batch.status == IMPORT_STATUS_CONFIRMED
+                    and target.record_status in ACTIVE_RECORD_STATUSES
+                )
+
+        # La reversión es lógica: las filas y dedupe_key permanecen para
+        # auditoría y para impedir reimportación, pero dejan de aportar demanda.
+        for record in own_records:
+            record.include_in_demand = False
+
+        historical_import.status = IMPORT_STATUS_REVERTED
+        historical_import.reversal_reason = safe_reason
+        historical_import.reverted_by_user_id = actor_user_id
+        historical_import.reverted_at = datetime.utcnow()
+        historical_import.lock_version += 1
+        db.session.commit()
+        return historical_import, False
+    except (IntegrityError, StaleDataError) as exc:
+        db.session.rollback()
+        raise ConflictError(
+            "El lote cambió concurrentemente; vuelva a cargar y reintente."
+        ) from exc
+    except ApiError:
+        db.session.rollback()
+        raise
+    except Exception:
+        db.session.rollback()
+        raise
 
 
 def review_record(
@@ -1809,15 +2279,6 @@ def review_record(
         raise ValidationError(
             "'weak_duplicate' solo aplica a fingerprints débiles."
         )
-    if (
-        "negative_net" in approval_set
-        and record.record_type != RECORD_TYPE_CORRECTION
-    ):
-        db.session.rollback()
-        raise ValidationError(
-            "'negative_net' solo aplica a registros de corrección."
-        )
-
     flags = _record_flags(record)
     for approval in approval_set:
         flags[approval] = True
@@ -1890,6 +2351,11 @@ def review_record(
         _refresh_counters(historical_import)
         db.session.commit()
         return record
+    except StaleDataError as exc:
+        db.session.rollback()
+        raise ConflictError(
+            "El lote cambió concurrentemente; vuelva a cargar y reintente."
+        ) from exc
     except Exception:
         db.session.rollback()
         raise
@@ -1917,17 +2383,34 @@ def _iso(value) -> str | None:
 def serialize_import(
     historical_import: HistoricalImport, *, is_admin: bool
 ) -> dict:
+    possible_duplicates = (
+        db.session.query(
+            func.count(func.distinct(HistoricalImportError.source_row_number))
+        )
+        .filter(
+            HistoricalImportError.historical_import_id == historical_import.id,
+            HistoricalImportError.error_code.in_(_DUPLICATE_ERROR_CODES),
+            HistoricalImportError.source_row_number.isnot(None),
+        )
+        .scalar()
+        or 0
+    )
     result = {
         "id": historical_import.public_id,
         "status": historical_import.status,
         "source_system": historical_import.source_system,
         "schema_version": historical_import.schema_version,
+        "parser_version": historical_import.schema_version,
+        "period_start": _iso(historical_import.period_start),
+        "period_end": _iso(historical_import.period_end),
         "counts": {
             "rows": historical_import.total_rows,
             "valid": historical_import.valid_rows,
             "errors": historical_import.error_count,
             "warnings": historical_import.warning_count,
             "reviews_pending": historical_import.review_count,
+            "pending_matches": historical_import.review_count,
+            "possible_duplicates": possible_duplicates,
             "matched": historical_import.matched_count,
             "unmatched": historical_import.unmatched_count,
             "strong_fingerprints": historical_import.strong_fingerprint_count,
@@ -1944,6 +2427,7 @@ def serialize_import(
         result["admin_metadata"] = {
             "original_filename": historical_import.original_filename,
             "file_size_bytes": historical_import.file_size_bytes,
+            "file_format": historical_import.file_format,
             "sha256": historical_import.sha256,
             "document_type": historical_import.document_type,
             "encoding": historical_import.file_encoding,
@@ -2098,7 +2582,7 @@ def list_records(
     )
     if match_status:
         candidate = match_status.strip()
-        if len(candidate) > 32:
+        if candidate not in _MATCH_STATUSES:
             raise ValidationError("El filtro 'match_status' no es válido.")
         query = query.filter(HistoricalDemandRecord.match_status == candidate)
     pagination = query.order_by(
@@ -2117,6 +2601,94 @@ def list_records(
     }
 
 
+def list_relationship_candidates(
+    public_id: str,
+    record_id: int,
+    *,
+    page_value,
+    per_page_value,
+) -> dict:
+    """Lista candidatos exactos y vigentes para una relación manual.
+
+    La consulta usa exclusivamente documento y código normalizados. Nunca
+    relaciona por nombre y no revela el archivo ni su ruta privada.
+    """
+    historical_import = get_import_or_404(public_id)
+    source_record = HistoricalDemandRecord.query.filter_by(
+        id=record_id,
+        historical_import_id=historical_import.id,
+    ).first()
+    if source_record is None:
+        raise NotFoundError("La fila histórica solicitada no existe en este lote.")
+    page, per_page = _parse_pagination(page_value, per_page_value)
+
+    if (
+        source_record.record_type == RECORD_TYPE_SALE
+        or not source_record.document_number_normalized
+    ):
+        return {
+            "items": [],
+            "pagination": {
+                "page": page,
+                "per_page": per_page,
+                "total": 0,
+                "pages": 0,
+            },
+        }
+
+    same_import_candidate = and_(
+        HistoricalDemandRecord.historical_import_id == historical_import.id,
+        HistoricalDemandRecord.source_row_number
+        < source_record.source_row_number,
+    )
+    confirmed_external_candidate = and_(
+        HistoricalDemandRecord.historical_import_id != historical_import.id,
+        HistoricalImport.status == IMPORT_STATUS_CONFIRMED,
+    )
+    query = (
+        HistoricalDemandRecord.query.join(
+            HistoricalImport,
+            HistoricalImport.id == HistoricalDemandRecord.historical_import_id,
+        )
+        .filter(
+            HistoricalDemandRecord.id != source_record.id,
+            HistoricalDemandRecord.document_number_normalized
+            == source_record.document_number_normalized,
+            HistoricalDemandRecord.product_code_normalized
+            == source_record.product_code_normalized,
+            HistoricalDemandRecord.record_type.in_(
+                (RECORD_TYPE_SALE, RECORD_TYPE_CORRECTION)
+            ),
+            HistoricalDemandRecord.effective_status.in_(ACTIVE_RECORD_STATUSES),
+            HistoricalDemandRecord.superseded_by_record_id.is_(None),
+            or_(same_import_candidate, confirmed_external_candidate),
+        )
+        .order_by(
+            HistoricalDemandRecord.event_date.desc(),
+            HistoricalDemandRecord.id.desc(),
+        )
+    )
+    pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+    return {
+        "items": [
+            {
+                "id": candidate.id,
+                "source_row_number": candidate.source_row_number,
+                "record_type": candidate.record_type,
+                "event_date": _iso(candidate.event_date),
+                "quantity": format(Decimal(candidate.quantity), "f"),
+            }
+            for candidate in pagination.items
+        ],
+        "pagination": {
+            "page": pagination.page,
+            "per_page": pagination.per_page,
+            "total": pagination.total,
+            "pages": pagination.pages,
+        },
+    }
+
+
 def list_errors(
     public_id: str,
     *,
@@ -2125,6 +2697,7 @@ def list_errors(
     severity: str | None,
     resolution_status: str | None,
     is_admin: bool,
+    category: str | None = None,
 ) -> dict:
     historical_import = get_import_or_404(public_id)
     page, per_page = _parse_pagination(page_value, per_page_value)
@@ -2150,6 +2723,13 @@ def list_errors(
             raise ValidationError("El filtro 'resolution_status' no es válido.")
         query = query.filter(
             HistoricalImportError.resolution_status == candidate
+        )
+    if category:
+        candidate = category.strip().casefold()
+        if candidate != "duplicate":
+            raise ValidationError("El filtro 'category' no es válido.")
+        query = query.filter(
+            HistoricalImportError.error_code.in_(_DUPLICATE_ERROR_CODES)
         )
     pagination = query.order_by(
         HistoricalImportError.source_row_number.asc(),

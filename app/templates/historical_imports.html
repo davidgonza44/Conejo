@@ -242,7 +242,7 @@
     </div>
 
     <div class="row row-cards mb-3">
-        <div class="col-6 col-lg-3">
+        <div class="col-6 col-lg">
             <div class="card historical-count-card">
                 <div class="card-body">
                     <span class="historical-count-icon bg-green-lt text-green"><i class="ti ti-check" aria-hidden="true"></i></span>
@@ -251,7 +251,7 @@
                 </div>
             </div>
         </div>
-        <div class="col-6 col-lg-3">
+        <div class="col-6 col-lg">
             <div class="card historical-count-card">
                 <div class="card-body">
                     <span class="historical-count-icon bg-yellow-lt text-yellow"><i class="ti ti-alert-triangle" aria-hidden="true"></i></span>
@@ -260,7 +260,7 @@
                 </div>
             </div>
         </div>
-        <div class="col-6 col-lg-3">
+        <div class="col-6 col-lg">
             <div class="card historical-count-card">
                 <div class="card-body">
                     <span class="historical-count-icon bg-red-lt text-red"><i class="ti ti-x" aria-hidden="true"></i></span>
@@ -269,12 +269,21 @@
                 </div>
             </div>
         </div>
-        <div class="col-6 col-lg-3">
+        <div class="col-6 col-lg">
             <div class="card historical-count-card">
                 <div class="card-body">
                     <span class="historical-count-icon bg-blue-lt text-blue"><i class="ti ti-user-question" aria-hidden="true"></i></span>
                     <strong id="detail-count-pending">—</strong>
                     <span>Revisiones pendientes</span>
+                </div>
+            </div>
+        </div>
+        <div class="col-6 col-lg">
+            <div class="card historical-count-card">
+                <div class="card-body">
+                    <span class="historical-count-icon bg-purple-lt text-purple"><i class="ti ti-copy" aria-hidden="true"></i></span>
+                    <strong id="detail-count-duplicates">—</strong>
+                    <span>Posibles duplicados</span>
                 </div>
             </div>
         </div>
@@ -486,7 +495,7 @@
              aria-labelledby="duplicates-tab" hidden>
             <div class="card-body border-bottom py-3">
                 <p class="text-secondary small mb-0">
-                    Se muestran hallazgos de deduplicación presentes en la página actual del endpoint de errores.
+                    Los hallazgos de deduplicación se filtran y paginan en el servidor.
                 </p>
             </div>
             <div class="table-responsive historical-table-wrap">
@@ -663,7 +672,7 @@
                 <div class="modal-body">
                     <div id="review-error" class="alert alert-danger d-none" role="alert" aria-live="assertive"></div>
                     <div class="alert alert-info small" id="review-contract-note" role="note">
-                        Solo se pueden enviar identificadores de candidatos entregados por la API o deducidos de registros visibles del mismo lote.
+                        Solo se pueden enviar identificadores de candidatos entregados y validados por la API.
                     </div>
 
                     <div class="mb-3" id="review-product-group">
@@ -675,7 +684,17 @@
                     <div class="mb-3 d-none" id="review-relationship-group">
                         <label class="form-label" for="review-related-record-id">Registro relacionado candidato</label>
                         <select class="form-select" id="review-related-record-id"></select>
-                        <div class="form-hint">
+                        <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mt-2"
+                             id="review-related-pagination">
+                            <span class="form-hint" id="review-related-page-label" aria-live="polite">Página —</span>
+                            <div class="btn-list">
+                                <button type="button" class="btn btn-sm btn-outline-secondary"
+                                        id="review-related-prev-page">Anterior</button>
+                                <button type="button" class="btn btn-sm btn-outline-secondary"
+                                        id="review-related-next-page">Siguiente</button>
+                            </div>
+                        </div>
+                        <div class="form-hint" id="review-related-hint">
                             Solo venta/corrección vigente del mismo documento y producto; el servidor vuelve a validarla.
                         </div>
                     </div>
@@ -723,6 +742,7 @@
         canConfirm: {{ can_confirm | tojson }},
         canRevert: {{ can_revert | tojson }},
         canExport: {{ can_export | tojson }},
+        csrfToken: {{ historical_csrf_token | tojson }},
         apiBase: "/api/historical-imports"
     });
 </script>

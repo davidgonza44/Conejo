@@ -32,6 +32,9 @@ def list_imports():
 
 
 def upload_import():
+    # Límite local del endpoint: no afecta autenticación ni APIs operativas y
+    # también protege el parser multipart cuando el cuerpo usa streaming.
+    request.max_content_length = MAX_MULTIPART_BYTES
     if (
         request.content_length is not None
         and request.content_length > MAX_MULTIPART_BYTES
@@ -88,15 +91,20 @@ def list_errors(import_id: str):
         per_page_value=request.args.get("per_page"),
         severity=request.args.get("severity"),
         resolution_status=request.args.get("resolution_status"),
+        category=request.args.get("category"),
         is_admin=_is_admin(),
     )
     return jsonify(result)
 
 
 def preview_import(import_id: str):
+    data = _json_body(optional=True)
+    unknown = set(data) - {"mapping"}
+    if unknown:
+        raise ValidationError("El preview contiene campos no permitidos.")
     historical_import = historical_import_service.preview_import(
         import_id,
-        _json_body(optional=True),
+        data,
         actor_user_id=current_user.id,
     )
     return jsonify(
@@ -175,6 +183,16 @@ def revert_import(import_id: str):
             ),
         }
     )
+
+
+def list_relationship_candidates(import_id: str, record_id: int):
+    result = historical_import_service.list_relationship_candidates(
+        import_id,
+        record_id,
+        page_value=request.args.get("page"),
+        per_page_value=request.args.get("per_page"),
+    )
+    return jsonify(result)
 
 
 def review_record(import_id: str, record_id: int):

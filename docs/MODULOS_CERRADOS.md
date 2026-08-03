@@ -8,6 +8,7 @@ No modificar salvo error real o necesidad estrictamente justificada.
 | Notas de entrega web | `/delivery-notes` | 2026-07-03 | `scripts/verify_delivery_notes_closure.py` |
 | Catálogo visual | `GET /catalog` | 2026-07-22 | `scripts/test_catalog.py` |
 | Chatbot interno de apoyo | `GET /chatbot` | 2026-07-22 | `scripts/test_chatbot.py` |
+| Importación histórica CSV | `/historical-imports` | 2026-08-02 | `scripts/test_historical_imports.py` |
 
 ## Notas de entrega — alcance cerrado
 
@@ -36,6 +37,25 @@ No modificar salvo error real o necesidad estrictamente justificada.
 - Sin modificaciones operativas de stock, movimientos, notas, productos, categorías o usuarios.
 - Deuda técnica posterior: CSRF/rate limiting transversal y exposición preexistente de `/api/test/products` y `/api/test/categories`; no se modificaron ahora.
 - No incluye: módulo predictivo.
+
+## Importación histórica CSV — alcance cerrado
+
+- Migración manual probada en MariaDB 10.4.32 real de XAMPP.
+- Ejecución idempotente verificada: la segunda pasada no duplicó columnas,
+  índices, claves foráneas, restricciones ni triggers.
+- Esquema histórico verificado mediante `information_schema`: InnoDB,
+  `utf8mb4`, columnas y tipos canónicos, índices, FKs, CHECKs y dos triggers
+  de inmutabilidad compatibles.
+- Flujo real aprobado sin confirmación: plantilla, upload privado, preview,
+  validación, matching exacto, consulta de errores, exportación y dry run.
+- Pruebas del importador: 120/120 verificaciones aprobadas.
+- Regresión adicional: catálogo 29/29 y chatbot 104/104 aprobadas.
+- Snapshots MySQL antes/después idénticos; sin cambios de stock, productos,
+  categorías, usuarios, movimientos, notas de entrega ni KPIs operativos.
+- Lote, registro y archivo privado temporales eliminados; sin datos TEST
+  residuales.
+- No incluye modelos predictivos, pronósticos ni recomendaciones de
+  reabastecimiento.
 
 ## Datos TEST
 

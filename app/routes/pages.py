@@ -5,6 +5,7 @@ Acceso al dashboard: solo admin e inventario; vendedor ve acceso denegado.
 """
 from flask import Blueprint, redirect, render_template, url_for
 from flask_login import current_user, login_required
+from flask_wtf.csrf import generate_csrf
 
 from app.models.user import ROLE_ADMIN, ROLE_INVENTARIO
 from app.utils.permissions import (
@@ -140,6 +141,7 @@ def historical_imports():
         can_export=role_has_permission(
             current_user.role, HISTORICAL_IMPORTS_EXPORT
         ),
+        historical_csrf_token=generate_csrf(),
     )
 
 

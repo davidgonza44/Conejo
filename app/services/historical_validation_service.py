@@ -90,6 +90,11 @@ def normalize_identifier(value: str) -> str:
     return strip_external(value).upper()
 
 
+def normalize_source_identifier(value: str) -> str:
+    """NFC + trim externo para IDs cuya capitalización es significativa."""
+    return strip_external(value)
+
+
 def normalize_name(value: str) -> str:
     """Normalización exclusiva para sugerencias, nunca para auto-match."""
     return " ".join(strip_external(value).casefold().split())
@@ -302,6 +307,7 @@ def _text_field(
     required: bool,
     max_length: int,
     formula_safe: bool = True,
+    preserve_original: bool = False,
 ) -> str | None:
     if len(raw) > MAX_CELL_CHARS:
         raise ValueError(
@@ -312,7 +318,7 @@ def _text_field(
         if required:
             raise ValueError(f"El campo '{field_name}' es obligatorio.")
         return None
-    if len(value) > max_length:
+    if len(value) > max_length or (preserve_original and len(raw) > max_length):
         raise ValueError(
             f"El campo '{field_name}' excede el máximo de {max_length} caracteres."
         )
@@ -322,7 +328,10 @@ def _text_field(
         raise ValueError(
             f"El campo '{field_name}' comienza con un prefijo de fórmula peligroso."
         )
-    return value
+    # Los campos ``original_*`` deben conservar exactamente el texto recibido.
+    # La versión NFC/trim se calcula de forma separada para comparar y crear
+    # fingerprints; nunca se sobrescribe silenciosamente el dato de origen.
+    return raw if preserve_original else value
 
 
 def validate_historical_row(raw_row: dict[str, str]) -> tuple[
@@ -372,6 +381,7 @@ def validate_historical_row(raw_row: dict[str, str]) -> tuple[
             field_name="product_code",
             required=True,
             max_length=255,
+            preserve_original=True,
         ),
     )
     product_name_original = capture(
@@ -382,6 +392,7 @@ def validate_historical_row(raw_row: dict[str, str]) -> tuple[
             field_name="product_name",
             required=False,
             max_length=255,
+            preserve_original=True,
         ),
     )
     quantity = capture(
@@ -447,6 +458,7 @@ def validate_historical_row(raw_row: dict[str, str]) -> tuple[
             field_name="document_number",
             required=False,
             max_length=255,
+            preserve_original=True,
         ),
     )
     source_record_original = capture(
@@ -457,6 +469,7 @@ def validate_historical_row(raw_row: dict[str, str]) -> tuple[
             field_name="source_record_id",
             required=False,
             max_length=255,
+            preserve_original=True,
         ),
     )
     source_line_original = capture(
@@ -467,6 +480,7 @@ def validate_historical_row(raw_row: dict[str, str]) -> tuple[
             field_name="source_line_id",
             required=False,
             max_length=255,
+            preserve_original=True,
         ),
     )
     unit_price = capture(
@@ -514,10 +528,12 @@ def validate_historical_row(raw_row: dict[str, str]) -> tuple[
         normalize_identifier(document_original) if document_original else None
     )
     source_record_normalized = (
-        normalize_identifier(source_record_original) if source_record_original else None
+        normalize_source_identifier(source_record_original)
+        if source_record_original
+        else None
     )
     source_line_normalized = (
-        normalize_identifier(source_line_original) if source_line_original else None
+        normalize_source_identifier(source_line_original) if source_line_original else None
     )
     normalized_lengths = (
         ("product_code", product_code_normalized),
