@@ -1,7 +1,7 @@
 """Controlador de notas de entrega: traduce HTTP <-> servicio."""
-from flask import jsonify, request
+from flask import Response, jsonify, request
 
-from app.services import delivery_note_service
+from app.services import delivery_note_pdf_service, delivery_note_service
 from app.services.exceptions import ValidationError
 
 
@@ -49,4 +49,20 @@ def cancel_note(note_id: int):
             ),
             "delivery_note": note.to_dict(),
         }
+    )
+
+
+def download_pdf(note_id: int):
+    """Descarga el PDF interno de una nota existente (emitida o cancelada)."""
+    pdf_bytes, filename = delivery_note_pdf_service.build_pdf_response(note_id)
+    return Response(
+        pdf_bytes,
+        status=200,
+        mimetype="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Type": "application/pdf",
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "no-store",
+        },
     )

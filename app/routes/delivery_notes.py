@@ -43,3 +43,10 @@ delivery_notes_bp.add_url_rule(
     ),
     methods=["POST"],
 )
+delivery_notes_bp.add_url_rule(
+    "/<int:note_id>/pdf",
+    view_func=permission_required(DELIVERY_NOTES_READ)(
+        delivery_note_controller.download_pdf
+    ),
+    methods=["GET"],
+)

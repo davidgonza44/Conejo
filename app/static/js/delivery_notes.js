@@ -486,9 +486,11 @@
         currentDetailStatus = null;
         $("detail-title").textContent = "Detalle de nota";
         $("detail-cancelled-alert").classList.add("d-none");
-        $("detail-cancelled-wrap").classList.add("d-none");
+        $("d-cancelled-wrap").classList.add("d-none");
         const btnCancel = $("btn-cancel-note");
         if (btnCancel) btnCancel.classList.add("d-none");
+        const btnPdf = $("btn-download-pdf");
+        if (btnPdf) btnPdf.disabled = true;
         setDetailVisible(true);
         getModal("detail-modal").show();
 
@@ -508,7 +510,7 @@
 
             if (note.status === "cancelled") {
                 $("detail-cancelled-alert").classList.remove("d-none");
-                $("detail-cancelled-wrap").classList.remove("d-none");
+                $("d-cancelled-wrap").classList.remove("d-none");
                 $("d-cancelled-by").textContent = note.cancelled_by || "—";
                 $("d-cancelled-at").textContent = fmtDateTime(note.cancelled_at);
             }
@@ -535,6 +537,7 @@
             if (btnCancel && CAN_CANCEL && note.status === "issued") {
                 btnCancel.classList.remove("d-none");
             }
+            if (btnPdf) btnPdf.disabled = false;
 
             setDetailVisible(false);
         } catch (error) {
@@ -544,6 +547,83 @@
             const err = $("detail-error");
             err.textContent = errorMessage(error);
             err.classList.remove("d-none");
+        }
+    }
+
+    function setPdfButtonBusy(busy) {
+        const btn = $("btn-download-pdf");
+        if (!btn) return;
+        btn.disabled = busy || !currentDetailId;
+        const icon = document.createElement("i");
+        if (busy) {
+            const spinner = document.createElement("span");
+            spinner.className = "spinner-border spinner-border-sm me-1";
+            spinner.setAttribute("aria-hidden", "true");
+            btn.replaceChildren(spinner, document.createTextNode("Generando PDF…"));
+        } else {
+            icon.className = "ti ti-download me-1";
+            btn.replaceChildren(icon, document.createTextNode("Descargar PDF"));
+        }
+    }
+
+    function filenameFromDisposition(headerValue) {
+        const raw = String(headerValue || "");
+        const match = /filename="?([A-Za-z0-9._-]+)"?/i.exec(raw);
+        return match ? match[1] : "nota-entrega.pdf";
+    }
+
+    async function downloadPdf() {
+        if (!currentDetailId) return;
+        const err = $("detail-error");
+        err.classList.add("d-none");
+        err.textContent = "";
+        setPdfButtonBusy(true);
+        try {
+            let response;
+            try {
+                response = await fetch(`/api/delivery-notes/${currentDetailId}/pdf`, {
+                    method: "GET",
+                    credentials: "same-origin",
+                });
+            } catch (error) {
+                throw new ApiError(0, "Error de conexión con el servidor.");
+            }
+
+            if (!response.ok) {
+                let data = {};
+                try {
+                    data = await response.json();
+                } catch (error) {
+                    // cuerpo no JSON
+                }
+                throw new ApiError(
+                    response.status,
+                    data.error || `Error HTTP ${response.status}.`,
+                );
+            }
+
+            const blob = await response.blob();
+            const filename = filenameFromDisposition(
+                response.headers.get("Content-Disposition"),
+            );
+            const objectUrl = URL.createObjectURL(blob);
+            const link = document.createElement("a");
+            link.href = objectUrl;
+            link.download = filename;
+            link.rel = "noopener";
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+        } catch (error) {
+            console.error("Error al descargar PDF:", error);
+            err.textContent = errorMessage(error);
+            err.classList.remove("d-none");
+            if (error.status === 401) {
+                showAlert("warning", "Su sesión expiró.", true);
+            }
+        } finally {
+            setPdfButtonBusy(false);
         }
     }
 
@@ -607,6 +687,8 @@
     if (CAN_CANCEL) {
         $("btn-cancel-note").addEventListener("click", cancelNote);
     }
+
+    $("btn-download-pdf").addEventListener("click", downloadPdf);
 
     async function init() {
         try {
