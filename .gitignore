@@ -15,6 +15,12 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 
+# Node.js (herramientas de desarrollo)
+node_modules/
+
+# Indice y estado local de CodeGraph
+.codegraph/
+
 # IDE
 .vscode/
 .idea/
