@@ -21,6 +21,7 @@ HISTORICAL_IMPORTS_UPLOAD = "historical_imports:upload"
 HISTORICAL_IMPORTS_REVIEW = "historical_imports:review"
 HISTORICAL_IMPORTS_CONFIRM = "historical_imports:confirm"
 HISTORICAL_IMPORTS_REVERT = "historical_imports:revert"
+PREDICTIONS_READ = "predictions:read"
 
 _ALL_PERMISSIONS = {
     PRODUCTS_READ,
@@ -39,6 +40,7 @@ _ALL_PERMISSIONS = {
     HISTORICAL_IMPORTS_REVIEW,
     HISTORICAL_IMPORTS_CONFIRM,
     HISTORICAL_IMPORTS_REVERT,
+    PREDICTIONS_READ,
 }
 
 ROLE_PERMISSIONS: dict[str, set[str]] = {
@@ -54,6 +56,7 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         REPORTS_READ,
         HISTORICAL_IMPORTS_READ,
         HISTORICAL_IMPORTS_EXPORT,
+        PREDICTIONS_READ,
     },
     ROLE_VENDEDOR: {
         PRODUCTS_READ,

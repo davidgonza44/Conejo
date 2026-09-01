@@ -9,6 +9,7 @@ No modificar salvo error real o necesidad estrictamente justificada.
 | Catálogo visual | `GET /catalog` | 2026-07-22 | `scripts/test_catalog.py` |
 | Chatbot interno de apoyo | `GET /chatbot` | 2026-07-22 | `scripts/test_chatbot.py` |
 | Importación histórica CSV | `/historical-imports` | 2026-08-02 | `scripts/test_historical_imports.py` |
+| Diagnóstico predictivo / readiness | `GET /predictions` | 2026-08-18 | `scripts/test_prediction_readiness.py` |
 
 ## Notas de entrega — alcance cerrado
 
@@ -56,6 +57,22 @@ No modificar salvo error real o necesidad estrictamente justificada.
   residuales.
 - No incluye modelos predictivos, pronósticos ni recomendaciones de
   reabastecimiento.
+
+## Diagnóstico predictivo / readiness — incremento cerrado
+
+- Alcance cerrado: infraestructura de diagnóstico de suficiencia histórica.
+- El módulo predictivo completo **no** está cerrado.
+- Ruta web: `GET /predictions` (Análisis predictivo).
+- API solo lectura: `GET /api/predictions/readiness`,
+  `GET /api/predictions/products`, `GET /api/predictions/products/<id>`.
+- Permiso: `predictions:read` (admin e inventario; vendedor no).
+- No entrena modelos, no genera pronósticos, no calcula reabastecimiento,
+  no crea `POST /api/predictions/run` ni tablas de corridas.
+- Pruebas: 53/53 aprobadas (incluye los 48 puntos exigidos) en SQLite aislado.
+- Snapshots de la BD aislada idénticos antes/después; sin cambios de stock,
+  movimientos, notas, históricos ni productos.
+- Sin datos TEST residuales ni archivos temporales.
+- Ver `docs/PREDICTION_READINESS.md`.
 
 ## Datos TEST
 

@@ -21,6 +21,7 @@ from app.utils.permissions import (
     HISTORICAL_IMPORTS_UPLOAD,
     INVENTORY_MOVE,
     INVENTORY_READ,
+    PREDICTIONS_READ,
     PRODUCTS_READ,
     PRODUCTS_WRITE,
     role_has_permission,
@@ -143,6 +144,14 @@ def historical_imports():
         ),
         historical_csrf_token=generate_csrf(),
     )
+
+
+@pages_bp.get("/predictions")
+@login_required
+def predictions():
+    if not role_has_permission(current_user.role, PREDICTIONS_READ):
+        return redirect(url_for("pages.access_denied"))
+    return render_template("predictions.html")
 
 
 @pages_bp.get("/access-denied")

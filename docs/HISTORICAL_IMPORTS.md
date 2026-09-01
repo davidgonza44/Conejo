@@ -8,9 +8,10 @@ no crea notas de entrega y no alimenta los KPI operativos actuales. Tampoco
 implementa predicción, pronósticos ni recomendaciones de reabastecimiento.
 
 La zona horaria institucional es `America/Caracas`. CSV v1 acepta únicamente
-fechas sin hora entre `2025-01-01` y `2025-12-31`, ambas inclusive. Una futura
-implementación de `demand_data_service` podrá unir esta fuente con las notas
-operativas mediante una regla explícita de corte y detección de solapamientos.
+fechas sin hora entre `2025-01-01` y `2025-12-31`, ambas inclusive. El
+diagnóstico de suficiencia (`demand_data_service`) une esta fuente con las
+notas operativas emitidas posteriores al `period_end` de los lotes
+confirmados; no genera pronósticos. Ver `docs/PREDICTION_READINESS.md`.
 
 ## Archivo y columnas
 

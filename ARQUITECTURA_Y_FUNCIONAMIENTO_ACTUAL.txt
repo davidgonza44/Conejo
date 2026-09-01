@@ -1,0 +1,812 @@
+ARQUITECTURA Y FUNCIONAMIENTO ACTUAL DEL PROYECTO
+Sistema inteligente de apoyo al control de inventario
+Ferreteria y Construcciones El Conejo C.A.
+
+Fecha del levantamiento: 2026-09-01
+Base del analisis: estado local actual del repositorio en D:\TESIS CODIGO
+
+===============================================================================
+1. PROPOSITO DE ESTE DOCUMENTO
+===============================================================================
+
+Este documento explica como esta estructurado, pensado e interconectado el
+proyecto en su estado actual. No describe solamente carpetas: reconstruye el
+recorrido de una peticion desde el navegador hasta MySQL, las reglas que
+protegen el inventario, el modelo de permisos, las relaciones entre tablas, el
+papel de cada modulo y la frontera entre lo que ya esta implementado y lo que
+todavia es trabajo futuro.
+
+La descripcion se obtuvo directamente del codigo, las rutas, modelos,
+servicios, plantillas, JavaScript, scripts y documentos internos. No se
+incluyen valores secretos del archivo .env.
+
+Importante sobre el estado observado: el arbol de trabajo contiene cambios
+locales sin consolidar relacionados principalmente con el modulo de
+diagnostico predictivo/readiness. Por tanto, este documento representa la
+fotografia local actual y no necesariamente una version publicada o un commit
+estable especifico.
+
+===============================================================================
+2. RESUMEN EJECUTIVO
+===============================================================================
+
+El sistema es una aplicacion web monolitica desarrollada con Flask. "Monolitica"
+significa que frontend, API, logica de negocio y acceso a datos viven en el
+mismo proyecto y se ejecutan en el mismo proceso Python. No existe un frontend
+React/Vue separado ni un microservicio independiente de prediccion.
+
+La arquitectura practica es:
+
+  Navegador
+     |
+     | GET de paginas HTML / fetch JSON / descarga de PDF o imagen
+     v
+  Flask (run.py -> create_app)
+     |
+     +-- Rutas web: renderizan plantillas Jinja2
+     +-- Rutas API: autentican, autorizan y delegan
+     +-- Controladores: traducen HTTP a llamadas Python
+     +-- Servicios: validan y ejecutan las reglas de negocio
+     +-- Modelos SQLAlchemy: representan y relacionan las tablas
+     |
+     v
+  MySQL/MariaDB (persistencia principal)
+
+  Almacenamiento complementario:
+     +-- uploads/products y uploads/users: imagenes controladas
+     +-- instance/historical_imports: CSV historicos privados
+
+Las decisiones arquitectonicas mas importantes son:
+
+1. El stock no se edita libremente desde productos. Despues de crear un
+   producto, todo cambio de current_stock debe pasar por inventario o por la
+   emision/cancelacion de una nota de entrega.
+2. Cada alteracion de stock deja una traza en stock_movements con stock
+   anterior, stock nuevo, motivo, usuario y fecha.
+3. Las operaciones delicadas bloquean filas con SELECT ... FOR UPDATE y agrupan
+   todos los cambios en una transaccion.
+4. La autenticacion determina quien es el usuario; los permisos determinan que
+   puede hacer. La interfaz oculta acciones no autorizadas, pero la API vuelve a
+   validarlas: la seguridad no depende de botones ocultos.
+5. Los datos historicos importados estan deliberadamente aislados del
+   inventario operativo. Importar un CSV no cambia existencias ni crea notas.
+6. El modulo llamado "Analisis predictivo" actualmente solo diagnostica si hay
+   suficiente historia y describe el patron de demanda. No entrena modelos, no
+   pronostica y no recomienda compras todavia.
+
+===============================================================================
+3. TECNOLOGIAS Y DEPENDENCIAS
+===============================================================================
+
+Backend y servidor:
+- Python 3.10 o superior.
+- Flask 3.x como framework web.
+- Flask-SQLAlchemy como integracion ORM.
+- PyMySQL como driver de MySQL.
+- Flask-Login para sesiones autenticadas basadas en cookie.
+- Flask-WTF para la validacion CSRF usada por el importador historico.
+- Authlib y requests para OpenID Connect/OAuth con Google.
+- python-dotenv para cargar configuracion desde .env.
+- cryptography como soporte criptografico de las integraciones.
+- fpdf2 para generar PDF de notas de entrega.
+
+Frontend:
+- HTML generado por Jinja2.
+- JavaScript nativo, sin framework SPA y sin proceso de compilacion.
+- Fetch API para consumir /api/* usando la cookie de la misma procedencia.
+- Tabler, que incluye componentes basados en Bootstrap 5.
+- Tabler Icons.
+- Chart.js en el dashboard para graficos.
+- Recursos de interfaz cargados desde CDN; esto implica dependencia de red para
+  que estilos, iconos o graficos externos se carguen normalmente.
+
+Persistencia:
+- MySQL 8 segun el README; el modulo historico tambien fue verificado por el
+  proyecto contra MariaDB 10.4.32 de XAMPP.
+- Charset utf8mb4.
+- No se usa una herramienta formal como Alembic/Flask-Migrate. La base inicial
+  se crea con db.create_all() y los incrementos tienen scripts manuales de
+  migracion.
+
+No aparecen actualmente pandas, scikit-learn o statsmodels en
+requirements.txt. Esto coincide con el hecho de que todavia no hay modelos de
+machine learning implementados.
+
+===============================================================================
+4. ESTRUCTURA FISICA DEL REPOSITORIO
+===============================================================================
+
+En el alcance app, scripts y docs se observaron 141 archivos: 88 Python,
+14 JavaScript, 18 HTML y 9 CSS, ademas de documentacion y otros recursos.
+
+Raiz:
+- run.py: punto de entrada del servidor Flask.
+- requirements.txt: dependencias Python.
+- .env: configuracion local real; no debe versionarse ni exponerse.
+- .env.example: plantilla de configuracion.
+- README.md: instrucciones basicas de instalacion y ejecucion.
+- uploads/: imagenes de productos y usuarios, fuera de static.
+- instance/: almacenamiento privado del importador historico.
+- historical-import-module.md: plan/alcance del importador historico.
+
+app/:
+- __init__.py: fabrica create_app(), inicializacion de extensiones, registro de
+  blueprints y manejadores globales de error.
+- config.py: traduce variables de entorno a configuracion Flask y construye la
+  URL de conexion MySQL.
+- extensions.py: instancias compartidas de SQLAlchemy, LoginManager y OAuth.
+- models/: entidades persistentes y relaciones.
+- routes/: mapa URL/metodo, autenticacion y permisos.
+- controllers/: adaptadores HTTP; leen request y forman response.
+- services/: reglas de negocio, validaciones y transacciones.
+- utils/: permisos y decoradores de autorizacion.
+- templates/: paginas HTML Jinja2 y correos HTML/TXT.
+- static/js/: comportamiento de cada pagina y consumo de API.
+- static/css/: apariencia particular de cada modulo.
+
+scripts/:
+- init_db.py: crea BD/tablas y datos semilla de forma idempotente basica.
+- migrate_*.py: migraciones manuales por incremento.
+- test_*.py y test_*.ps1: pruebas funcionales o de integracion por modulo.
+- cleanup_*.py e inspect_*.py: apoyo para datos de prueba y diagnostico.
+- verify_delivery_notes_closure.py: verificacion de cierre del modulo.
+
+docs/:
+- MODULOS_CERRADOS.md: inventario de incrementos considerados cerrados.
+- HISTORICAL_IMPORTS.md: contrato completo de importacion historica.
+- PREDICTION_READINESS.md: reglas de construccion y diagnostico de demanda.
+
+===============================================================================
+5. ARRANQUE Y CICLO DE VIDA DE LA APLICACION
+===============================================================================
+
+El comando de desarrollo es:
+
+  venv\Scripts\python.exe run.py
+
+run.py importa create_app(), crea la instancia y ejecuta Flask en 0.0.0.0:5000
+con debug=True. En el estado verificado durante este levantamiento, el servidor
+respondio HTTP 200 en http://127.0.0.1:5000/.
+
+create_app() realiza este orden:
+
+1. Crea Flask(__name__).
+2. Carga Config, que previamente llama load_dotenv().
+3. Conecta db, login_manager y oauth con la aplicacion.
+4. Registra el cliente OIDC de Google si hay configuracion utilizable.
+5. Define el tratamiento de usuarios no autenticados:
+   - /api/* y /media/* reciben JSON 401.
+   - una pagina web protegida redirige a /login.
+6. Importa todos los modelos para que SQLAlchemy conozca las tablas.
+7. Registra los blueprints de main, auth, users, categories, products,
+   inventory, delivery notes, reports, pages, media, chatbot, historicos y
+   predictions.
+8. Registra errores globales:
+   - ApiError conserva mensaje y status de negocio.
+   - 404 devuelve JSON "Ruta no encontrada".
+   - 405 devuelve JSON "Metodo HTTP no permitido".
+   - 413 informa que la peticion excede el tamano permitido.
+
+Configuracion relevante leida del entorno:
+- SECRET_KEY: firma las sesiones y tokens CSRF.
+- APP_ENV: development o production.
+- APP_BASE_URL: base para enlaces enviados por correo.
+- DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME.
+- ADMIN_EMAIL y ADMIN_PASSWORD para la siembra inicial.
+- configuracion SMTP y activacion MAIL_ENABLED.
+- expiracion de passwordless y recuperacion de contrasena.
+- credenciales y redirect URI de Google.
+
+En produccion deben sustituirse los valores de desarrollo, protegerse la clave
+secreta, desactivarse debug y usarse un servidor WSGI de produccion.
+
+===============================================================================
+6. PATRON DE CAPAS Y RECORRIDO DE UNA PETICION
+===============================================================================
+
+Ejemplo: registrar una entrada de inventario.
+
+1. inventory.html contiene el formulario y expone CAN_MOVE segun el rol.
+2. inventory.js valida superficialmente los campos y hace POST JSON a
+   /api/inventory/entry con credentials="same-origin".
+3. inventory_bp aplica permission_required("inventory:move").
+4. inventory_controller comprueba que el body sea un objeto JSON.
+5. inventory_service:
+   - rechaza un user_id enviado por el cliente;
+   - toma current_user.id desde la sesion;
+   - valida producto activo y cantidad;
+   - bloquea la fila Product;
+   - crea StockMovement;
+   - cambia Product.current_stock;
+   - confirma ambos cambios juntos.
+6. El controlador serializa movimiento y producto actualizado.
+7. El JavaScript refresca productos, movimientos y alertas de bajo stock.
+
+Esta separacion tiene una intencion clara:
+- route decide acceso y URL;
+- controller decide forma HTTP;
+- service decide reglas del negocio;
+- model decide forma persistente y relaciones;
+- template/JS decide presentacion e interaccion.
+
+No toda validacion del frontend se considera confiable. La validacion decisiva
+esta en servicios y base de datos.
+
+===============================================================================
+7. MODELO DE DATOS Y RELACIONES
+===============================================================================
+
+7.1 users
+
+Representa personas que usan el sistema. Guarda nombre, email unico, username
+unico, hash opcional de contrasena, rol, estado activo, verificacion de email,
+nombre interno de foto y marcas de tiempo. Nunca expone password_hash en
+to_dict(). Flask-Login usa UserMixin y carga al usuario por id de sesion.
+
+Relaciones:
+- un usuario tiene muchas identidades de autenticacion;
+- puede registrar muchos movimientos de stock;
+- puede crear muchas notas de entrega;
+- puede cancelar notas y ejecutar etapas de importacion historica.
+
+7.2 auth_identities
+
+Desacopla al usuario de su mecanismo de acceso. Los proveedores reconocidos
+son local, google y passwordless. La pareja proveedor + identificador externo
+es unica. Esto permite que una misma persona tenga cuenta local y Google
+vinculados sin duplicar el User principal.
+
+7.3 passwordless_tokens y password_reset_tokens
+
+Son tokens temporales de un solo uso. Solo se persiste el hash, no el valor en
+texto plano. Guardan expiracion y momento de uso. Los tokens de recuperacion
+tambien conservan IP y user-agent opcionales para auditoria.
+
+7.4 categories
+
+Clasifica productos. El nombre es unico. Una categoria tiene muchos productos.
+No puede eliminarse mientras existan productos asociados.
+
+7.5 products
+
+Es el maestro de articulos. Campos principales: codigo unico, nombre,
+descripcion, categoria, unidad, stock actual, stock minimo, precios de compra y
+venta, URL controlada de imagen y estado activo.
+
+is_low_stock se calcula como current_stock <= minimum_stock. La baja es logica:
+DELETE /api/products/<id> coloca is_active=false para preservar historiales.
+
+7.6 stock_movements
+
+Es el libro de auditoria de existencias. Cada fila contiene producto, tipo
+(entrada, salida o ajuste), cantidad, stock anterior, stock nuevo, motivo,
+usuario y fecha. La existencia se conserva en Product.current_stock por rapidez,
+pero StockMovement explica como se llego a ese valor.
+
+7.7 delivery_notes y delivery_note_items
+
+DeliveryNote es una nota de entrega, expresamente no una factura fiscal. Guarda
+numero NE-000001 derivado de su id, datos del cliente, estado issued/cancelled,
+total, creador, cancelador y fechas.
+
+DeliveryNoteItem guarda lineas de producto. Ademas de product_id, copia codigo,
+nombre y precio unitario; asi una nota historica no cambia visualmente si luego
+se renombra el producto o cambia su precio. Cada linea guarda cantidad y total.
+
+7.8 historical_imports
+
+Representa un lote CSV, no una fila comercial. Usa un public_id UUID para la
+API, un storage_key opaco privado, hash SHA-256 unico, tamano, origen, periodo,
+versiones de parser/mapping/validacion/fingerprint, contadores y estado.
+
+Estados: uploaded -> previewed -> dry_run_ready -> confirmed -> reverted.
+Guarda quien y cuando ejecuto cada etapa, token de confirmacion hasheado,
+resumen de dry run, motivo de reversion y lock_version para concurrencia
+optimista. Sus restricciones limitan formato CSV, delimitador punto y coma,
+periodo dentro de 2025, estados validos y contadores no negativos.
+
+7.9 historical_demand_records
+
+Representa cada hecho historico canonico. Conserva valores originales y
+normalizados de ids, documento, codigo y nombre; fecha, cantidad, precio,
+tipo/estado; producto enlazado o sugerido; relaciones con ventas corregidas o
+anuladas; fingerprint; fortaleza de huella; estado de matching; inclusion en
+demanda; banderas de revision; revisor; fila canonica original y version de
+bloqueo.
+
+No usa cantidades negativas. sale, return, cancellation y correction expresan
+la semantica. effective_status permite reversion/supersesion logica sin alterar
+el hecho fuente original. Eventos ORM impiden editar campos fuente o eliminar
+fisicamente registros pertenecientes a lotes confirmados/revertidos.
+
+7.10 historical_import_errors
+
+Registra errores, advertencias y asuntos de revision sin guardar mensajes que
+revelen la fila completa. Tiene codigo, severidad, campo, valor redactado,
+estado de resolucion, accion permitida, responsable, fecha y nota. Esto separa
+el hecho importado de la evidencia de calidad y su resolucion administrativa.
+
+Relacion conceptual principal:
+
+  Category 1 ---- N Product 1 ---- N StockMovement
+                         |
+                         +---- N DeliveryNoteItem N ---- 1 DeliveryNote
+                         |
+                         +---- N HistoricalDemandRecord N ---- 1 HistoricalImport
+                                                        |
+                                                        +---- HistoricalImportError
+
+  User 1 ---- N AuthIdentity
+  User 1 ---- N StockMovement / DeliveryNote / acciones historicas
+
+===============================================================================
+8. AUTENTICACION, SESION Y AUTORIZACION
+===============================================================================
+
+Metodos de acceso implementados:
+
+1. Local: email o username + contrasena hasheada por Werkzeug.
+2. Passwordless: solicita un codigo temporal por email; en development puede
+   devolverse dev_token para probar sin SMTP.
+3. Google OIDC: redireccion de navegador, validacion de id_token por Authlib y
+   creacion, inicio o vinculacion de identidad.
+4. Recuperacion de contrasena: enlace temporal de un uso; en desarrollo puede
+   devolverse dev_reset_link.
+
+La sesion es la de Flask-Login, transportada por cookie. Los fetch usan
+credentials="same-origin". El backend nunca acepta user_id o created_by_user_id
+del body en operaciones auditables: usa current_user.
+
+Roles:
+- admin: todos los permisos.
+- inventario: lectura/escritura de productos y categorias, movimientos,
+  lectura/cancelacion de notas, reportes, lectura/exportacion historica y
+  readiness.
+- vendedor: lectura de productos y lectura/creacion de notas de entrega.
+
+Permisos granulares:
+- products:read, products:write, categories:write.
+- inventory:move, inventory:read.
+- delivery_notes:read/create/cancel.
+- reports:read, users:manage.
+- historical_imports:read/export/upload/review/confirm/revert.
+- predictions:read.
+
+En el importador, solo admin tiene upload/review/confirm/revert; inventario
+solo read/export; vendedor no entra. Las escrituras historicas agregan CSRF
+mediante X-CSRFToken y la confirmacion agrega un token efimero propio.
+
+Observacion: el endpoint publico de registro acepta un rol valido enviado en el
+body. Aunque el comentario indica vendedor por defecto, permitir seleccionar
+admin/inventario desde /api/auth/register merece revision antes de produccion.
+Ademas, CSRF no esta aplicado transversalmente a todas las escrituras: esta
+fortalecido expresamente en el modulo historico, mientras otros POST/PUT/DELETE
+dependen de cookie same-origin y controles actuales.
+
+===============================================================================
+9. MODULOS FUNCIONALES
+===============================================================================
+
+9.1 Productos y categorias
+
+Productos permite buscar, filtrar por categoria y bajo stock, incluir inactivos,
+crear, editar, desactivar y administrar imagen. current_stock solo puede
+definirse al crear; una edicion posterior que lo incluya es rechazada.
+
+Categorias ofrece CRUD. La lectura requiere sesion; escribir requiere permiso.
+Eliminar una categoria con productos devuelve conflicto.
+
+Las imagenes admiten jpg/jpeg/png/webp, maximo 2 MiB. Se valida extension,
+tamano real y magic bytes, se genera nombre aleatorio y se guarda fuera de
+static. /media/products y /media/users sirven solo carpetas permitidas y
+requieren sesion.
+
+9.2 Inventario
+
+Entrada: suma una cantidad entera positiva.
+Salida: resta una cantidad entera positiva y rechaza stock insuficiente.
+Ajuste: establece un stock entero no negativo, exige motivo y rechaza cambios
+sin efecto.
+
+Los productos deben existir y estar activos. La fila se bloquea para evitar que
+dos peticiones concurrentes calculen desde el mismo stock. Movimiento y stock
+se confirman juntos. Se puede consultar historial general o por producto,
+filtrar por tipo y limitar resultados.
+
+9.3 Notas de entrega
+
+Crear una nota valida cliente e items, prohibe productos repetidos, bloquea
+todos los productos, verifica actividad y stock, crea cabecera y lineas,
+calcula totales con el precio vigente, crea una salida por item y descuenta
+existencia. Todo ocurre en una transaccion: si un item falla, no debe quedar una
+nota parcial ni un descuento parcial.
+
+Cancelar solo se permite una vez. Devuelve cada cantidad mediante movimientos
+de entrada, registra usuario/fecha y cambia el estado a cancelled. El PDF se
+genera a demanda con fpdf2 para notas emitidas o canceladas y se entrega con
+no-store y nosniff.
+
+9.4 Dashboard y reportes
+
+Es de solo lectura para admin e inventario. Agrega KPIs y consultas:
+- resumen general;
+- stock frente a minimo y productos bajo stock;
+- productos sin movimiento o con exceso;
+- entradas frente a salidas y movimientos por categoria;
+- productos con mas/menos salidas y ajustes;
+- notas por periodo, producto, usuario y cliente.
+
+El frontend usa Chart.js, filtros de fecha, destruccion/recreacion de graficos y
+estados vacios controlados. No modifica datos.
+
+9.5 Catalogo visual
+
+Vista de consulta para todos los roles autenticados. Consume productos activos,
+presenta tarjetas, filtros y datos adecuados. No modifica productos, stock ni
+notas.
+
+9.6 Chatbot interno
+
+No es un modelo generativo ni llama a servicios externos. Es determinista:
+normaliza texto, detecta intenciones mediante reglas/patrones, busca productos o
+categorias y genera respuestas estructuradas. Atiende consultas de producto,
+precio de venta, disponibilidad, categoria y listados. Limita candidatos
+ambiguos y resultados.
+
+La respuesta se adapta al rol: admin e inventario pueden ver datos de stock; el
+vendedor recibe disponibilidad comercial sin la misma exposicion administrativa.
+purchase_price queda excluido. No persiste conversaciones ni ejecuta acciones.
+
+9.7 Importacion historica CSV 2025
+
+Es el modulo mas defensivo y complejo. Acepta CSV UTF-8 con BOM, delimitador ;,
+maximo 10 MiB de archivo, 12 MiB multipart, 50.000 filas, 40 columnas y 4.096
+caracteres por celda. La plantilla canonica contiene event_date, product_code,
+product_name, quantity, record_type, record_status, document_number,
+source_record_id, source_line_id y unit_price.
+
+Flujo:
+1. Upload guarda el archivo bajo UUID privado y calcula SHA-256. No importa.
+2. Preview valida estructura/mapping, normaliza, crea staging, hace matching y
+   genera issues.
+3. Review permite resolver sugerencias, inactivos, relaciones o duplicados
+   debiles con acciones permitidas.
+4. Dry run revalida y, si no hay bloqueos, genera token de confirmacion de 15
+   minutos; solo el hash se guarda.
+5. Confirm vuelve a bloquear y revalidar archivo, productos, relaciones y
+   duplicados dentro de una transaccion y activa include_in_demand.
+6. Revert es logico, conserva evidencia y debe respetar dependencias inversas.
+
+Matching exacto por codigo normalizado tiene prioridad. El nombre solo sugiere,
+nunca enlaza automaticamente. SHA-256 impide recargar el mismo archivo. La
+huella fuerte permite deduplicacion; una huella debil requiere revision. Las
+exportaciones neutralizan celdas que empiezan por =, +, - o @ para reducir
+formula injection.
+
+La importacion nunca crea StockMovement, nunca cambia Product.current_stock o
+minimum_stock y nunca crea DeliveryNote. Esa separacion es un invariante.
+
+9.8 Diagnostico predictivo/readiness
+
+Une dos fuentes sin duplicarlas:
+- hechos de lotes historicos confirmed, vigentes, enlazados a producto y con
+  include_in_demand=true;
+- items de notas operativas issued, pero solo despues del period_end historico.
+
+No usa stock_movements porque cada nota ya produjo una salida y sumarlos
+duplicaria demanda. Entradas, ajustes y salidas manuales tampoco equivalen
+automaticamente a demanda comercial.
+
+Construye series diarias completas, incluyendo dias en cero. Agrega ventas y
+resta devoluciones validamente relacionadas. Reporta inconsistencias en vez de
+forzar silenciosamente resultados negativos a cero.
+
+Clasificacion de suficiencia:
+- ADVANCED_READY: >=60 dias y >=12 dias positivos.
+- SIMPLE_READY: >=30 dias y >=8 positivos.
+- LIMITED: >=8 dias y >=4 positivos.
+- INSUFFICIENT: existe demanda positiva, pero no llega a LIMITED.
+- NO_HISTORY: ningun periodo positivo.
+
+Describe patrones no_history, sparse, intermittent o continuous usando
+proporcion de ceros, intervalo entre demandas y coeficiente de variacion. Los
+productos inactivos pueden auditarse, pero no se consideran candidatos de
+reabastecimiento.
+
+Lo que NO existe todavia: entrenamiento, seleccion de ARIMA/Holt-Winters/
+Croston, backtesting, metricas de error, forecast futuro, tabla de ejecuciones,
+POST /api/predictions/run o calculo de cantidades de compra.
+
+===============================================================================
+10. FRONTEND Y SU INTERCONEXION CON EL BACKEND
+===============================================================================
+
+El frontend se renderiza en servidor. base_auth.html da el marco de login,
+recuperacion y acceso denegado. base_app.html da sidebar, barra del usuario,
+foto, logout, pie y bloques extensibles. Cada pagina agrega su CSS y JS.
+
+Jinja conoce current_user y recibe booleanos como can_write, can_move,
+can_create o can_confirm. Esos booleanos controlan visibilidad y habilitacion de
+acciones. Luego cada archivo JS consume endpoints JSON y actualiza el DOM sin
+recargar toda la pagina.
+
+Mapeo principal:
+- /login -> login.html + login.js -> /api/auth/login y passwordless.
+- /profile -> profile.html + profile.js -> foto del usuario.
+- /products -> products.html/js -> /api/products y /api/categories.
+- /categories -> categories.html/js -> /api/categories.
+- /catalog -> catalog.html/js -> lectura de /api/products.
+- /inventory -> inventory.html/js -> /api/inventory/* y /api/products.
+- /delivery-notes -> HTML/JS -> /api/delivery-notes y productos.
+- /dashboard -> HTML/JS -> /api/reports/*.
+- /chatbot -> HTML/JS -> POST /api/chatbot/message.
+- /historical-imports -> HTML/JS -> /api/historical-imports/*.
+- /predictions -> HTML/JS -> /api/predictions/*.
+
+El servidor retorna 401 JSON a fetch cuando expira la sesion. Los JS traducen
+401, 403, 404, 409 y fallos de red a mensajes legibles. Las paginas protegidas,
+cuando se solicitan directamente sin sesion, redirigen a /login.
+
+Una particularidad de navegacion: / devuelve informacion JSON del backend, no
+el frontend. La entrada humana es /login. Tras autenticarse, el JS redirige a
+/dashboard; un vendedor no tiene acceso al dashboard y la ruta lo envia a
+/access-denied. Conviene que una evolucion futura redirija al vendedor a una
+pantalla permitida, como catalogo o notas, para mejorar el flujo.
+
+===============================================================================
+11. INVENTARIO DE RUTAS
+===============================================================================
+
+Paginas:
+GET /, /health/db, /login, /forgot-password, /reset-password, /dashboard,
+/products, /categories, /catalog, /chatbot, /profile, /inventory,
+/delivery-notes, /historical-imports, /predictions, /access-denied.
+
+Autenticacion:
+POST /api/auth/register, /login, /logout, /passwordless/request,
+/passwordless/verify, /password-reset/request, /password-reset/confirm.
+GET /api/auth/me, /google/login, /google/callback.
+POST y DELETE /api/auth/me/profile-photo.
+
+Usuarios admin:
+GET/POST /api/users; GET/PUT /api/users/<id>.
+
+Categorias y productos:
+GET/POST /api/categories; GET/PUT/DELETE /api/categories/<id>.
+GET/POST /api/products; GET /api/products/low-stock;
+GET/PUT/DELETE /api/products/<id>;
+POST/DELETE /api/products/<id>/image.
+
+Inventario:
+POST /api/inventory/entry, /exit, /adjustment.
+GET /api/inventory/movements,
+/api/inventory/products/<id>/movements, /api/inventory/low-stock.
+
+Notas:
+GET/POST /api/delivery-notes; GET /api/delivery-notes/<id>;
+POST /api/delivery-notes/<id>/cancel; GET /api/delivery-notes/<id>/pdf.
+
+Reportes, todos GET bajo /api/reports:
+dashboard-summary, stock-vs-minimum, low-stock-products,
+products-without-movement, excess-stock-products, entries-vs-exits,
+movements-by-category, top-products-by-exits, least-products-by-exits,
+inventory-adjustments, delivery-notes-by-period, top-delivered-products,
+delivery-notes-by-user y delivery-notes-by-customer.
+
+Historicos:
+GET /api/historical-imports, /template.csv, /<uuid>, /<uuid>/records,
+/<uuid>/errors, /<uuid>/errors.csv y candidatos de relacion.
+POST /upload, /<uuid>/preview, /dry-run, /confirm, /revert y revision de fila.
+
+Predicciones/readiness, todos GET:
+/api/predictions/readiness, /products y /products/<id>.
+
+Media:
+GET /media/products/<filename> y /media/users/<filename> con sesion.
+
+===============================================================================
+12. TRANSACCIONES, CONCURRENCIA Y CONSISTENCIA
+===============================================================================
+
+La consistencia se concentra en servicios. Inventario y notas usan bloqueos de
+fila de producto. La emision y cancelacion escriben cabecera/lineas,
+movimientos y stocks dentro de un commit unico. Los caminos de error criticos
+hacen rollback.
+
+El importador historico combina:
+- SHA-256 y restricciones unicas;
+- locks pesimistas durante confirmacion/reversion;
+- lock_version optimista en lotes y registros;
+- restricciones CHECK y claves foraneas RESTRICT;
+- eventos ORM y triggers de migracion para inmutabilidad;
+- revalidacion justo antes del commit.
+
+El patron de guardar stock actual junto a un libro de movimientos mejora las
+consultas, pero exige que ningun codigo nuevo escriba current_stock fuera de los
+servicios autorizados. La base actualmente no muestra un trigger general que
+impida por si solo cualquier UPDATE arbitrario de products.current_stock; la
+disciplina reside principalmente en la capa de aplicacion.
+
+===============================================================================
+13. ERRORES, SEGURIDAD Y PRIVACIDAD
+===============================================================================
+
+ApiError unifica ValidationError 400, NotFoundError 404 y ConflictError 409.
+Los controladores evitan aceptar cuerpos no JSON cuando esperan JSON. Las
+credenciales invalidas usan mensaje generico para no revelar existencia del
+usuario. Las serializaciones excluyen hashes y secretos.
+
+Protecciones destacadas:
+- contrasenas hasheadas;
+- tokens temporales hasheados, con expiracion y uso unico;
+- archivos historicos fuera de rutas publicas;
+- nombres aleatorios y magic bytes para imagenes;
+- send_from_directory y allowlist de carpetas;
+- permisos comprobados en servidor;
+- row locks para stocks;
+- neutralizacion de formulas CSV;
+- no SQL dinamico en el importador;
+- limite de carga y paginacion historica maxima de 100.
+
+Aspectos a endurecer antes de produccion:
+- cerrar o limitar el registro publico y evitar autoasignacion de roles altos;
+- CSRF transversal en todas las escrituras con cookie;
+- rate limiting para login, passwordless, reset y chatbot;
+- eliminar o proteger /api/test/products y /api/test/categories, actualmente
+  rutas de diagnostico publicas que serializan informacion de productos;
+- cabeceras de seguridad globales, politica CSP y estrategia para CDN;
+- servidor WSGI, debug desactivado, TLS, rotacion de secretos y permisos DB de
+  minimo privilegio;
+- politica aprobada de retencion/borrado de archivos historicos;
+- monitoreo, logging estructurado y respaldo/recuperacion de MySQL.
+
+===============================================================================
+14. INICIALIZACION, MIGRACIONES Y DATOS SEMILLA
+===============================================================================
+
+scripts/init_db.py primero crea la base si no existe, luego db.create_all() y
+siembra un administrador, seis categorias y cuatro productos de ejemplo. Es
+idempotente por presencia: si ya existe algun usuario/categoria/producto omite
+todo el bloque correspondiente. Esto es adecuado para desarrollo, pero no
+reemplaza migraciones versionadas de produccion.
+
+Hay scripts manuales para auth, notas, historicos, password reset y foto de
+perfil. El modulo historico documenta ejecucion idempotente y verificacion de
+DDL real. A medida que el esquema crezca seria aconsejable adoptar una cadena
+de migracion versionada, con upgrade/downgrade controlados y registro de version.
+
+===============================================================================
+15. PRUEBAS Y ESTADO DE MADUREZ
+===============================================================================
+
+No hay una carpeta tests convencional ni pipeline CI visible en el inventario;
+las verificaciones se concentran en scripts Python y PowerShell. La
+documentacion registra cierres previos:
+- inventario web;
+- notas de entrega web;
+- catalogo visual (29 verificaciones);
+- chatbot (104 verificaciones);
+- importacion historica (120 verificaciones y regresiones);
+- readiness (53 verificaciones en SQLite aislado).
+
+Este levantamiento no reejecuto suites que puedan escribir en la base local; se
+verifico el arranque y respuesta HTTP del servidor y se hizo analisis estatico
+del codigo. Los numeros anteriores son evidencia documentada por el repositorio,
+no una nueva certificacion ejecutada en esta fecha.
+
+Madurez por area:
+- CRUD operativo, inventario, notas, catalogo y chatbot: funcionalmente
+  implementados y documentados como cerrados.
+- importacion historica: implementacion extensa, auditable y aislada.
+- readiness: incremento diagnostico implementado, pero con cambios locales
+  actuales sin consolidar.
+- prediccion real y reabastecimiento inteligente: pendientes.
+- despliegue productivo, CI/CD y observabilidad: no se ven cerrados.
+
+===============================================================================
+16. DEPENDENCIAS ENTRE MODULOS
+===============================================================================
+
+Productos es el nucleo del dominio. Categorias lo clasifica. Inventario modifica
+su stock y genera movimientos. Notas consume productos, descuenta/devuelve stock
+y genera esos mismos movimientos. Reportes leen productos, movimientos y notas.
+Catalogo y chatbot leen productos sin escribir. Imagenes complementan producto
+y usuario.
+
+Historicos tambien enlaza a productos, pero no toca su stock. Readiness consume
+historicos confirmados y notas emitidas, cuidando el corte temporal. Por eso el
+flujo de datos puede resumirse asi:
+
+  Categorias --> Productos --> Inventario --> Movimientos --> Reportes
+                    |              ^
+                    |              |
+                    +--> Notas ----+----> Reportes
+                    |
+                    +--> Catalogo / Chatbot
+                    |
+  CSV --> Importacion historica --> Demanda historica --+
+                    |                                   |
+                    +-- no modifica inventario          +--> Readiness
+                                                        |
+  Notas emitidas posteriores al corte ------------------+
+
+Usuarios/sesion/permisos atraviesan todas esas ramas. Esto convierte la
+autorizacion y la integridad de Product.current_stock en preocupaciones
+transversales, no en modulos aislados.
+
+===============================================================================
+17. LIMITACIONES Y DEUDA TECNICA OBSERVABLE
+===============================================================================
+
+1. El README conserva una descripcion temprana (version 0.1/incremento 1) y no
+   refleja completamente todos los modulos actuales.
+2. / devuelve JSON de una etapa inicial en lugar de dirigir a la experiencia
+   web; esto puede confundir al usuario.
+3. El login dirige siempre a /dashboard, aunque vendedor no tenga acceso.
+4. El registro publico con rol seleccionable es un riesgo de escalamiento.
+5. CSRF y rate limiting no son aun transversales.
+6. Los endpoints /api/test/* son publicos y deberian retirarse o protegerse.
+7. La gestion de usuarios tiene API pero no se observo una pagina web dedicada
+   en templates.
+8. No hay migraciones formalmente versionadas con Alembic.
+9. Los scripts de prueba no equivalen por si solos a CI automatizada.
+10. El frontend depende de CDN y duplica helpers apiFetch/error handling entre
+    varios archivos JS; podria centralizarse.
+11. No existe todavia el componente de prediccion que da sentido final al
+    titulo de reabastecimiento inteligente.
+12. La configuracion por defecto incluye claves/credenciales de desarrollo; la
+    operacion productiva debe fallar de forma segura si no se reemplazan.
+13. Fechas de modelos usan datetime.utcnow naive; hay logica especifica para
+    America/Caracas en demanda, pero convendria una estrategia temporal global.
+
+===============================================================================
+18. EVOLUCION LOGICA RECOMENDADA
+===============================================================================
+
+Prioridad de seguridad y operacion:
+1. Cerrar autoasignacion de roles, proteger rutas de prueba y aplicar CSRF/rate
+   limiting transversal.
+2. Configurar produccion con WSGI, TLS, secretos robustos, cuenta MySQL de
+   minimo privilegio, backups y logs.
+3. Adoptar migraciones versionadas y CI que cree una base aislada, ejecute
+   todas las suites y verifique invariantes.
+
+Prioridad funcional:
+4. Cargar y confirmar el CSV real de 2025 con el flujo auditado.
+5. Evaluar la calidad que muestre readiness, sin forzar modelos sobre series
+   insuficientes.
+6. Disenar una capa de experimentos reproducibles: corte temporal, baseline,
+   backtesting y metricas apropiadas por patron.
+7. Implementar modelos simples primero y metodos intermitentes solo donde los
+   datos lo justifiquen.
+8. Persistir corrida, version de datos/modelo, horizonte, resultado y metricas.
+9. Separar pronostico de recomendacion: una politica de reposicion tambien
+   necesita lead time, stock de seguridad, pedidos en transito, restricciones
+   de proveedor y unidades de compra.
+10. Mantener toda recomendacion como apoyo explicable y aprobable por una
+    persona antes de convertirla en operacion de inventario.
+
+===============================================================================
+19. CONCLUSION
+===============================================================================
+
+El proyecto actual ya es mucho mas que un CRUD: tiene un nucleo transaccional
+de inventario, trazabilidad de movimientos, notas que afectan stock de manera
+atomica, control por roles, autenticacion multiple, reportes, manejo seguro de
+imagenes, un chatbot determinista y una canalizacion historica especialmente
+cuidadosa.
+
+La idea arquitectonica dominante es preservar trazabilidad y evitar que una
+funcionalidad analitica contamine la operacion. El inventario operativo es la
+fuente del estado actual; los movimientos explican sus cambios; las notas
+representan demanda operativa; el CSV conserva demanda pasada en un subsistema
+separado; readiness integra ambas fuentes sin doble conteo.
+
+El siguiente gran salto no consiste simplemente en "agregar IA". Consiste en
+llevar datos reales a traves del importador, demostrar suficiencia, construir
+evaluacion temporal reproducible y solo entonces generar pronosticos y reglas
+de reabastecimiento explicables. Esa secuencia es coherente con como esta
+pensado el sistema hoy: primero integridad y auditoria, despues analitica y,
+finalmente, apoyo inteligente a decisiones.
+
+FIN DEL DOCUMENTO
