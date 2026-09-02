@@ -3,7 +3,7 @@
 # - Instala MySQL 8 y utilidades de Python (paquetes del sistema).
 # - Crea el entorno virtual e instala dependencias.
 # - Arranca MySQL (datadir en tmpfs) y siembra la base de datos.
-# - Instala binarios fijados de Gentle AI y Engram en /usr/local/bin.
+# - Instala Node.js 22 fijado (>=22.16) y binarios Gentle AI/Engram en /usr/local/bin.
 #
 # Nota: el datadir de MySQL vive en tmpfs (ver .cursor/mysql_boot.sh), por lo
 # que NO persiste en el snapshot. El comando `start` vuelve a inicializarlo y
@@ -25,6 +25,7 @@ export DEBIAN_FRONTEND=noninteractive
 # Versiones exactas del canal estable. No usar latest/main/master.
 GENTLE_AI_VERSION="v2.5.0"
 ENGRAM_VERSION="v1.20.0"
+NODE_VERSION="v22.23.2"
 CLOUD_TOOLS_BIN_DIR="/usr/local/bin"
 CLOUD_TOOLS_MAX_ARCHIVE_BYTES="$((128 * 1024 * 1024))"
 
@@ -33,6 +34,10 @@ GENTLE_AI_SHA256_LINUX_AMD64="2ba84a3a7ba2b1193019bde2acb05b02cbf222b667568c9196
 GENTLE_AI_SHA256_LINUX_ARM64="16a6243d17c146e3fc0024f6f005c5bd141fbb2dda4b56e269318e499ddc170b"
 ENGRAM_SHA256_LINUX_AMD64="7dc3003318e303bee269a4772144f3ce01c8ec700bfd524aaec76770acd389ca"
 ENGRAM_SHA256_LINUX_ARM64="7eb815910a76ae6cfa9a5d0161d3701e293dcca71f7743cffa62e236e5af59af"
+
+# SHA-256 oficiales de https://nodejs.org/dist/v22.23.2/SHASUMS256.txt
+NODE_SHA256_LINUX_X64="b294a556e639d64338823920e5866c21c02741742d2e1529ee1a225c1ec9252a"
+NODE_SHA256_LINUX_ARM64="013b59cfd2819703a6f4a14ab891fc46fc2a4e3f5bcd92de3fb4929b43e35b30"
 
 cloud_tools_fail() {
   echo "!! $*" >&2
@@ -159,8 +164,101 @@ cloud_tools_install_release_binary() {
   echo "==> ${name} ${tag} instalado en ${dest}"
 }
 
+install_pinned_nodejs() {
+  echo "==> Instalando Node.js ${NODE_VERSION} (oficial, >=22.16 para CodeGraph)"
+
+  local dest_node="${CLOUD_TOOLS_BIN_DIR}/node"
+  local dest_npm="${CLOUD_TOOLS_BIN_DIR}/npm"
+  if cloud_tools_version_matches "$dest_node" "${NODE_VERSION#v}" \
+    && [ -x "$dest_npm" ] \
+    && "$dest_npm" --version >/dev/null 2>&1; then
+    echo "==> Node.js ${NODE_VERSION} ya está instalado en ${dest_node}; se reutiliza."
+  else
+    local arch node_arch expected_sha
+    arch="$(cloud_tools_linux_arch)"
+    case "$arch" in
+      amd64)
+        node_arch="x64"
+        expected_sha="$NODE_SHA256_LINUX_X64"
+        ;;
+      arm64)
+        node_arch="arm64"
+        expected_sha="$NODE_SHA256_LINUX_ARM64"
+        ;;
+      *)
+        cloud_tools_fail "Arquitectura Linux no prevista para Node.js: ${arch}"
+        ;;
+    esac
+
+    local archive="node-${NODE_VERSION}-linux-${node_arch}.tar.gz"
+    local download_base="https://nodejs.org/dist/${NODE_VERSION}"
+    local tmpdir
+    tmpdir="$(mktemp -d)"
+    # shellcheck disable=SC2064
+    trap "rm -rf '$tmpdir'" RETURN
+
+    cloud_tools_download "${download_base}/SHASUMS256.txt" "${tmpdir}/SHASUMS256.txt"
+    cloud_tools_download "${download_base}/${archive}" "${tmpdir}/${archive}"
+
+    if ! grep -Fq "$archive" "${tmpdir}/SHASUMS256.txt"; then
+      cloud_tools_fail "${archive} no aparece en SHASUMS256.txt de ${NODE_VERSION}"
+    fi
+    (
+      cd "$tmpdir"
+      sha256sum --check --strict --ignore-missing SHASUMS256.txt
+    ) || cloud_tools_fail "Falló la verificación SHA-256 oficial de ${archive}"
+
+    local actual_sha
+    actual_sha="$(sha256sum "${tmpdir}/${archive}" | awk '{print $1}')"
+    if [ "$actual_sha" != "$expected_sha" ]; then
+      cloud_tools_fail "SHA-256 de ${archive} no coincide con el digest fijado en install.sh"
+    fi
+
+    tar -xzf "${tmpdir}/${archive}" -C "$tmpdir"
+    local extracted="${tmpdir}/node-${NODE_VERSION}-linux-${node_arch}"
+    if [ ! -x "${extracted}/bin/node" ]; then
+      cloud_tools_fail "El archivo ${archive} no contiene bin/node"
+    fi
+
+    # npm/npx del tarball oficial son wrappers relativos a lib/node_modules.
+    # Hay que conservar el prefijo completo, no copiar solo bin/.
+    local prefix="/usr/local/lib/nodejs/node-${NODE_VERSION}"
+    local staged="${prefix}.tmp"
+    sudo rm -rf "$staged"
+    sudo mkdir -p /usr/local/lib/nodejs
+    sudo mv "$extracted" "$staged"
+    sudo rm -rf "$prefix"
+    sudo mv "$staged" "$prefix"
+
+    local name
+    for name in node npm npx corepack; do
+      if [ -e "${prefix}/bin/${name}" ]; then
+        sudo ln -sfn "${prefix}/bin/${name}" "${CLOUD_TOOLS_BIN_DIR}/${name}"
+      fi
+    done
+
+    if ! cloud_tools_version_matches "$dest_node" "${NODE_VERSION#v}"; then
+      cloud_tools_fail "node quedó en ${dest_node} pero no reporta ${NODE_VERSION}"
+    fi
+    echo "==> Node.js ${NODE_VERSION} instalado en ${dest_node} (prefijo ${prefix})"
+  fi
+
+  # Cursor Cloud coloca /exec-daemon delante de /usr/local/bin. Si cargo/bin
+  # existe y va primero en PATH, enlazar ahí evita que Node 22.14 del overlay
+  # gane a la versión fijada. No se instala NVM/Volta/mise/asdf.
+  if [ -d /usr/local/cargo/bin ]; then
+    local tool
+    for tool in node npm npx; do
+      if [ -e "${CLOUD_TOOLS_BIN_DIR}/${tool}" ]; then
+        sudo ln -sfn "${CLOUD_TOOLS_BIN_DIR}/${tool}" "/usr/local/cargo/bin/${tool}"
+      fi
+    done
+    echo "==> Enlaces Node en /usr/local/cargo/bin para preceder /exec-daemon"
+  fi
+}
+
 install_cloud_agent_tools() {
-  echo "==> Instalando herramientas fijadas de Cloud Agents (Gentle AI ${GENTLE_AI_VERSION}, Engram ${ENGRAM_VERSION})"
+  echo "==> Instalando herramientas fijadas de Cloud Agents (Node ${NODE_VERSION}, Gentle AI ${GENTLE_AI_VERSION}, Engram ${ENGRAM_VERSION})"
 
   if [ "$(uname -s)" != "Linux" ]; then
     cloud_tools_fail "Gentle AI/Engram del Cloud Build solo se instalan en Linux"
@@ -189,6 +287,8 @@ install_cloud_agent_tools() {
 
   local gentle_archive="gentle-ai_${GENTLE_AI_VERSION#v}_linux_${arch}.tar.gz"
   local engram_archive="engram_${ENGRAM_VERSION#v}_linux_${arch}.tar.gz"
+
+  install_pinned_nodejs
 
   cloud_tools_install_release_binary \
     "gentle-ai" \
