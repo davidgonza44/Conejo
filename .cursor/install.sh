@@ -2,7 +2,11 @@
 # Setup idempotente del entorno de desarrollo para Cloud Agents.
 # - Instala MySQL 8 y utilidades de Python (paquetes del sistema).
 # - Crea el entorno virtual e instala dependencias.
-# - Prepara el usuario/base de datos de MySQL y los datos semilla.
+# - Arranca MySQL (datadir en tmpfs) y siembra la base de datos.
+#
+# Nota: el datadir de MySQL vive en tmpfs (ver .cursor/mysql_boot.sh), por lo
+# que NO persiste en el snapshot. El comando `start` vuelve a inicializarlo y
+# a sembrarlo en cada arranque; aquí se ejecuta también para validar el setup.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -14,18 +18,6 @@ echo "==> Instalando paquetes del sistema (mysql-server, python3-venv)"
 sudo apt-get update -qq
 sudo apt-get install -y -qq mysql-server python3-venv python3-pip
 
-echo "==> Arrancando MySQL para la inicialización"
-bash .cursor/mysql_boot.sh
-
-echo "==> Creando usuario de base de datos de desarrollo (idempotente)"
-sudo mysql <<'SQL'
-CREATE USER IF NOT EXISTS 'app_user'@'localhost' IDENTIFIED BY 'app_password';
-CREATE USER IF NOT EXISTS 'app_user'@'127.0.0.1' IDENTIFIED BY 'app_password';
-GRANT ALL PRIVILEGES ON *.* TO 'app_user'@'localhost' WITH GRANT OPTION;
-GRANT ALL PRIVILEGES ON *.* TO 'app_user'@'127.0.0.1' WITH GRANT OPTION;
-FLUSH PRIVILEGES;
-SQL
-
 echo "==> Creando entorno virtual e instalando dependencias"
 python3 -m venv venv
 ./venv/bin/pip install --upgrade pip -q
@@ -36,13 +28,8 @@ if [ ! -f .env ]; then
   cp .cursor/dev.env .env
 fi
 
-echo "==> Inicializando base de datos, tablas y datos semilla (idempotente)"
+echo "==> Arrancando MySQL y sembrando la base de datos"
+bash .cursor/mysql_boot.sh
 ./venv/bin/python scripts/init_db.py
-
-# Se detiene MySQL de forma limpia para que el snapshot generado por el build
-# quede con un directorio de datos consistente. El comando `start` lo vuelve a
-# levantar en cada boot.
-echo "==> Deteniendo MySQL de forma limpia (datadir consistente para el snapshot)"
-sudo mysqladmin shutdown 2>/dev/null || true
 
 echo "==> Setup completado."
