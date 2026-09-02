@@ -21,6 +21,9 @@ node_modules/
 # Indice y estado local de CodeGraph
 .codegraph/
 
+# Salidas generadas por Repomix
+repomix-output.*
+
 # IDE
 .vscode/
 .idea/
@@ -44,3 +47,5 @@ uploads/
 # Archivos temporales de pruebas
 /tests/tmp/
 /tests/.tmp/
+# Local AI runtime state
+.atl/
