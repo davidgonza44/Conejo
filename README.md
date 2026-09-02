@@ -1,91 +1,201 @@
 # Sistema inteligente de apoyo al control de inventario
 
-Sistema web de apoyo al control de inventario y predicción de necesidades de
-reabastecimiento para **Ferretería y Construcciones El Conejo C.A.**
+Aplicación web para apoyar el control de inventario de **Ferretería y
+Construcciones El Conejo C.A.** El sistema actual ya incluye una interfaz
+Jinja2, operaciones de inventario, notas de entrega, importación histórica y
+diagnóstico de preparación de datos; no genera todavía pronósticos ni planes de
+reabastecimiento.
 
 Trabajo de Grado — Universidad José Antonio Páez.
 Autores: David González y Rafael Sánchez.
 
-## Stack tecnológico
+## Puesta en marcha
 
-- Python 3.10+
-- Flask + Flask-SQLAlchemy + Flask-Login
-- MySQL 8.0 (driver PyMySQL)
-- Frontend (fases posteriores): Bootstrap 5, Chart.js
-- Machine Learning (fases posteriores): pandas, scikit-learn, statsmodels
-
-## Requisitos previos
-
-- Python 3.10 o superior
-- MySQL 8.0 en ejecución local (o accesible por red)
-
-## Instalación y ejecución
-
-1. Crear y activar el entorno virtual (PowerShell):
+Requisitos: Python 3.10 o superior y MySQL 8 accesible. Node.js solo es
+necesario para las herramientas de análisis del repositorio.
 
 ```powershell
 python -m venv venv
 venv\Scripts\activate
-```
-
-2. Instalar dependencias:
-
-```powershell
 pip install -r requirements.txt
-```
-
-3. Configurar variables de entorno:
-
-```powershell
 copy .env.example .env
 ```
 
-Editar `.env` con las credenciales de MySQL locales (`DB_USER`, `DB_PASSWORD`, etc.).
+Complete en `.env` las variables locales de MySQL y de las integraciones que
+vaya a habilitar. Nunca use credenciales reales en `.env.example`.
 
-4. Crear la base de datos, tablas y datos semilla:
+En una base de datos de desarrollo desechable:
 
 ```powershell
 python scripts\init_db.py
-```
-
-5. Levantar el servidor de desarrollo:
-
-```powershell
 python run.py
 ```
 
-6. Verificar en el navegador o con Postman:
+`scripts/init_db.py` y los scripts de migración, limpieza o pruebas HTTP pueden
+modificar datos. Revise su destino antes de ejecutarlos.
 
-| Ruta | Descripción |
-| --- | --- |
-| `http://localhost:5000/` | Información del sistema |
-| `http://localhost:5000/health/db` | Estado de la conexión a MySQL |
-| `http://localhost:5000/api/test/categories` | Categorías semilla en JSON |
-| `http://localhost:5000/api/test/products` | Productos semilla en JSON |
+## Estado y arquitectura
 
-## Estructura del proyecto
+- Backend: Flask con application factory, blueprints, Flask-Login,
+  Flask-WTF, SQLAlchemy, PyMySQL y MySQL 8.
+- Frontend: Jinja2 renderizado en el servidor, Tabler/Bootstrap, CSS,
+  JavaScript nativo y Chart.js.
+- Integraciones opcionales verificadas: Google OpenID Connect y correo SMTP.
+- Módulos existentes: autenticación, usuarios y permisos, productos,
+  categorías, movimientos, notas de entrega, reportes, importaciones
+  históricas, chatbot y preparación de datos predictivos.
 
-```
-app/
-├── __init__.py       # application factory (create_app)
-├── config.py         # configuración desde .env
-├── extensions.py     # instancias de SQLAlchemy y LoginManager
-├── models/           # modelos SQLAlchemy (6 tablas)
-├── routes/           # blueprints (rutas de prueba por ahora)
-├── services/         # lógica de negocio de stock (próximo incremento)
-├── templates/        # vistas Jinja2 (próximo incremento)
-└── static/           # CSS/JS/imágenes (próximo incremento)
-scripts/
-└── init_db.py        # creación de BD y datos semilla
-run.py                # punto de entrada
+El flujo preferido conserva la separación existente:
+
+```text
+Flask route -> controller -> service -> SQLAlchemy model -> MySQL
 ```
 
-## Reglas de negocio del inventario
+Algunas rutas de página renderizan plantillas directamente y el dashboard
+conserva consultas existentes en su capa de rutas. No se requiere una
+reescritura para uniformarlas.
 
-1. El stock no se modifica manualmente desde el producto.
-2. Todo cambio de stock crea un registro en `stock_movements`.
-3. Una entrada aumenta el stock; una salida lo disminuye.
-4. Un ajuste corrige el stock y guarda el motivo.
-5. No se puede registrar una salida mayor al stock disponible.
-6. Al confirmar una nota de entrega se descuenta automáticamente el stock.
-7. Los productos con `current_stock <= minimum_stock` se marcan como bajo stock.
+- [Diagrama interactivo](docs/architecture/system-overview.html)
+- [Fuente verificable del diagrama](docs/architecture/system-overview.json)
+
+## Referencias visuales
+
+`references/` contiene la dirección visual aprobada. Antes de modificar una
+pantalla, lea `references/README.md` y `references/MANIFEST.csv` y use solo las
+imágenes relacionadas con ella.
+
+> **Prohibido:** no leer, copiar, empaquetar ni usar
+> `references/90_archivo_no_usar/`.
+
+El nombre de marca válido es **Ferretería y Construcciones El Conejo C.A.** y
+el logo fuente está en `references/00_marca/logo_oficial_el_conejo.png`.
+
+## Herramientas de contexto y análisis
+
+Instale primero las dependencias Node declaradas por el repositorio cuando
+trabaje en una copia nueva:
+
+```powershell
+npm ci
+```
+
+| Herramienta | Uso y estado en este repositorio | Comando principal | Salida local |
+| --- | --- | --- | --- |
+| AGENTS / Cursor | `AGENTS.md` es la única fuente de reglas; Cursor solo remite a ella. | Leer `AGENTS.md` antes de trabajar | Ninguna |
+| OpenSpec 1.10 | Requisitos y criterios aprobados, sin duplicar reglas de agentes. | `openspec doctor` | `openspec/` versionado |
+| CodeGraph 2.3.10 | Orientación, impacto y revisión estructural. Doctor y orientación funcionan con la dependencia local. | `npm run codegraph:orient` | `.codegraph/`, ignorada |
+| Repomix 1.18 | Paquete XML comprimido para contexto controlado. | `npm run repomix:pack` | `repomix-output.xml`, ignorado |
+| Archify 2.17 | Diagrama de arquitectura basado en evidencia del repositorio. Se usa el skill ya instalado; no hay dependencia nueva. | Ver comandos siguientes | JSON y HTML bajo `docs/architecture/` |
+| Gentle AI 2.5 | Solo evaluado mediante ayuda, doctor y dry-run; no se instaló el preset. | `gentle-ai doctor` | Ninguna en esta fase |
+| Ponytail | Plugin ya disponible para contener sobreingeniería y aplicar KISS/YAGNI. | Se activa desde el asistente | Sin scaffolding |
+| RTK | Pendiente de identificar el producto exacto. No se asume Redux Toolkit. | No aplica | Ninguna |
+
+### CodeGraph
+
+```powershell
+npm run codegraph:doctor
+npm run codegraph:orient
+npm run codegraph:review
+```
+
+`codegraph:orient` construye o actualiza su índice local bajo `.codegraph/`;
+ese directorio nunca debe versionarse. No hace falta un paso `init` adicional
+para los comandos actuales.
+
+### Repomix
+
+```powershell
+npm run repomix:pack
+git check-ignore repomix-output.xml
+```
+
+`.repomixignore` excluye credenciales, dependencias, índices, entornos Python,
+datos subidos, instancias, importaciones privadas, temporales de prueba, la
+carpeta de referencias prohibida y salidas generadas. El HTML autocontenido de
+Archify también se excluye porque su runtime embebido no aporta contexto de
+código; la fuente JSON sí puede incluirse.
+
+El paquete es local y potencialmente sensible aunque el escaneo automático no
+encuentre secretos. Revíselo antes de compartirlo y no publique su contenido en
+logs, incidencias o prompts externos.
+
+### Archify
+
+El diagrama actual tiene tipo `architecture`, perfil `showcase`, 11 nodos y
+fuentes fijadas a una revisión Git. Para regenerarlo con el skill instalado:
+
+```powershell
+$archify = Join-Path $HOME ".codex\skills\archify"
+node "$archify\bin\archify.mjs" validate architecture `
+  docs\architecture\system-overview.json --quality showcase `
+  --repo-root . --json
+node "$archify\bin\archify.mjs" deliver architecture `
+  docs\architecture\system-overview.json `
+  docs\architecture\system-overview.html --quality showcase `
+  --repo-root . --json
+node "$archify\bin\archify.mjs" visual-check `
+  docs\architecture\system-overview.html --json
+```
+
+`visual-check` genera capturas y sidecars locales de comprobación. Inspecciónelos
+y elimínelos después; solo el JSON fuente y el HTML final pertenecen al
+repositorio.
+
+### Gentle AI, Ponytail y RTK
+
+El preset se evaluó sin instalarlo:
+
+```powershell
+gentle-ai --version
+gentle-ai doctor
+gentle-ai install --help
+gentle-ai install --preset full-gentleman --scope workspace --dry-run
+```
+
+El dry-run propuso los agentes `cursor`, `vscode-copilot` y `codex`, y estos
+componentes en orden: `claude-theme`, `context7`, `persona`, `engram`, `gga`,
+`opencode-gentle-logo`, `permissions`, `sdd` y `skills`. El comando informó 2
+pasos de preparación y 12 de aplicación, pero no mostró paths de destino; no se
+inventan rutas ausentes del resultado.
+
+No se conserva ningún elemento del preset en esta fase: `AGENTS.md`, Cursor,
+OpenSpec, Engram y los skills ya cubren las necesidades aprobadas, y aplicar el
+preset duplicaría o podría sobrescribir configuración existente. El doctor
+actual informa estado `unhealthy` por `gga` ausente, dos binarios Engram en
+`PATH` y un handshake MCP persistido fallido; corregir herramientas globales
+queda fuera del alcance del repositorio.
+
+Ponytail ya aporta el control KISS/YAGNI como plugin, por lo que no se agrega
+otra dependencia ni scaffolding. RTK seguirá detenido hasta recibir el nombre o
+enlace del producto exacto.
+
+## Seguridad de las salidas
+
+- No incluya `.env`, `instance/`, `uploads/`, `private_imports/`, datos de
+  usuarios, credenciales, dumps ni reportes privados en análisis o commits.
+- `.codegraph/`, `.atl/` y `repomix-output.*` son estado local ignorado.
+- No versione capturas temporales, sidecars de validación ni cachés Python.
+- Revise `git status`, el diff completo y `git diff --check` antes de entregar.
+
+## Verificación
+
+Comprobaciones seguras de documentación y herramientas:
+
+```powershell
+npm run codegraph:doctor
+openspec doctor
+openspec validate --all --strict --no-interactive
+git diff --check
+```
+
+Suites que crean sus propios datos SQLite temporales:
+
+```powershell
+python scripts/test_delivery_note_pdf.py
+python scripts/test_historical_imports.py
+python scripts/test_prediction_readiness.py
+```
+
+Trate cualquier otro script bajo `scripts/` como mutante hasta inspeccionar su
+código. Las reglas completas de seguridad, arquitectura y validación están en
+[`AGENTS.md`](AGENTS.md).
