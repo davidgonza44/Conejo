@@ -85,7 +85,8 @@ npm ci
 | CodeGraph 2.3.10 | Orientación, impacto y revisión estructural. Doctor y orientación funcionan con la dependencia local. | `npm run codegraph:orient` | `.codegraph/`, ignorada |
 | Repomix 1.18 | Paquete XML comprimido para contexto controlado. | `npm run repomix:pack` | `repomix-output.xml`, ignorado |
 | Archify 2.17 | Diagrama de arquitectura basado en evidencia del repositorio. Se usa el skill ya instalado; no hay dependencia nueva. | Ver comandos siguientes | JSON y HTML bajo `docs/architecture/` |
-| Gentle AI 2.5 | Solo evaluado mediante ayuda, doctor y dry-run; no se instaló el preset. | `gentle-ai doctor` | Ninguna en esta fase |
+| Gentle AI 2.5.0 | Binario fijado en el Cursor Cloud Build. No se instala el preset ni se usa como fuente de reglas. | `gentle-ai doctor` | Ninguna en esta fase |
+| Engram 1.20.0 | Binario local fijado en el Cursor Cloud Build. MCP perfil `agent`; sin Engram Cloud/sync. | `engram version` | `~/.engram` fuera del repo |
 | Ponytail | Plugin ya disponible para contener sobreingeniería y aplicar KISS/YAGNI. | Se activa desde el asistente | Sin scaffolding |
 | RTK | Pendiente de identificar el producto exacto. No se asume Redux Toolkit. | No aplica | Ninguna |
 
@@ -139,6 +140,15 @@ node "$archify\bin\archify.mjs" visual-check `
 `visual-check` genera capturas y sidecars locales de comprobación. Inspecciónelos
 y elimínelos después; solo el JSON fuente y el HTML final pertenecen al
 repositorio.
+
+### Cursor Cloud: Gentle AI y Engram
+
+El Cloud Build instala binarios exactos en `/usr/local/bin`:
+
+- Gentle AI `v2.5.0` (release oficial `Gentleman-Programming/gentle-ai`)
+- Engram `v1.20.0` (canal estable `v*`, no `pi-v*` ni prereleases `v2.0.0-rc.*`)
+
+Engram queda en modo local. No se configuran `ENGRAM_CLOUD_*`, autosync ni memoria precargada en el snapshot. El MCP de Cloud Agents debe registrarse en Cursor Cloud (no en el repositorio) como stdio: `engram mcp --tools=agent`. No ejecutar `engram setup cursor` ni versionar `~/.cursor/mcp.json`.
 
 ### Gentle AI, Ponytail y RTK
 
