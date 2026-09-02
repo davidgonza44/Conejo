@@ -1,0 +1,24 @@
+archivo,estado,seccion,nota
+00_marca/logo_oficial_el_conejo.png,final,marca,Logo oficial de la empresa
+01_inicio/01_inicio.png,final,inicio,Pantalla principal
+02_inventario/01_categorias.png,final,inventario,Categorías
+03_compras/01_ordenes_de_compra.png,final,compras,Órdenes de compra
+03_compras/02_proveedores.png,final,compras,Proveedores dentro de Compras
+03_compras/03_recepciones.png,final,compras,Recepciones
+04_analisis_predictivo/01_pronostico_de_demanda.png,final,analisis_predictivo,Pronóstico de demanda
+04_analisis_predictivo/02_reabastecimiento.png,final,analisis_predictivo,Reabastecimiento
+04_analisis_predictivo/03_precision_del_modelo.png,final,analisis_predictivo,Precisión del modelo
+04_analisis_predictivo/04_tendencias/01_tendencia_al_alza.png,final,tendencias,Tendencia al alza
+04_analisis_predictivo/04_tendencias/02_tendencia_a_la_baja.png,final,tendencias,Tendencia a la baja
+04_analisis_predictivo/04_tendencias/03_tendencia_estable.png,final,tendencias,Tendencia estable
+04_analisis_predictivo/04_tendencias/04_todas_las_tendencias.png,final,tendencias,Resumen de todas las tendencias
+05_configuracion/01_general.png,final,configuracion,Configuración general
+05_configuracion/02_analisis_predictivo.png,final,configuracion,Configuración del análisis predictivo
+05_configuracion/03_notificaciones.png,final,configuracion,Notificaciones
+05_configuracion/04_usuarios_y_roles.png,final,configuracion,Usuarios y roles
+05_configuracion/05_seguridad.png,final,configuracion,Seguridad
+05_configuracion/06_respaldo.png,final,configuracion,Respaldo
+90_archivo_no_usar/obsoletos/proveedores_dentro_de_inventario_OBSOLETO.png,obsoleto,archivo,No usar: proveedores fue movido a Compras
+90_archivo_no_usar/duplicados/pronostico_de_demanda_DUPLICADO.png,duplicado,archivo,Duplicado exacto
+90_archivo_no_usar/duplicados/tendencia_al_alza_DUPLICADO.png,duplicado,archivo,Duplicado exacto
+90_archivo_no_usar/duplicados/reabastecimiento_DUPLICADO.png,duplicado,archivo,Duplicado exacto
