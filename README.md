@@ -3,8 +3,7 @@
 Sistema web de apoyo al control de inventario y predicción de necesidades de
 reabastecimiento para **Ferretería y Construcciones El Conejo C.A.**
 
-Trabajo de Grado — Universidad José Antonio Páez.
-Autores: David González y Rafael Sánchez.
+
 
 ## Stack tecnológico
 
