@@ -1,0 +1,188 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "El Conejo Inventory System",
+    "locale": "en",
+    "animation": "none",
+    "quality_profile": "showcase",
+    "viewBox": [1380, 760],
+    "repository": {
+      "url": "https://github.com/davidgonza44/Conejo.git",
+      "revision": "d494467537e154007f4f5be0aa162c638fd2185d"
+    },
+    "views": [
+      {
+        "id": "request-path",
+        "label": "Request path",
+        "focus": ["browser", "jinja-ui", "flask-app", "controllers", "services", "models", "mysql"],
+        "note": "Follow a browser request through the server-rendered Flask application and persistence layers."
+      },
+      {
+        "id": "external-services",
+        "label": "External services",
+        "focus": ["cdn-assets", "google-oidc", "smtp-server", "private-storage"],
+        "note": "Inspect the verified asset, identity, email, and file-storage integrations."
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "browser",
+      "type": "external",
+      "label": "Web browser",
+      "sublabel": "Authenticated users",
+      "pos": [25, 300],
+      "size": [155, 72]
+    },
+    {
+      "id": "jinja-ui",
+      "type": "frontend",
+      "label": "Jinja UI",
+      "sublabel": "Templates, CSS, native JS",
+      "sources": [
+        { "path": "app/templates/base_app.html", "line": 1, "label": "Application shell" },
+        { "path": "app/static/js/dashboard.js", "line": 1, "label": "Page script" }
+      ],
+      "pos": [225, 300],
+      "size": [175, 72]
+    },
+    {
+      "id": "flask-app",
+      "type": "backend",
+      "label": "Flask application",
+      "sublabel": "Factory and blueprints",
+      "sources": [
+        { "path": "app/__init__.py", "line": 8, "end_line": 55, "label": "Factory and registration" }
+      ],
+      "pos": [445, 300],
+      "size": [175, 72]
+    },
+    {
+      "id": "controllers",
+      "type": "backend",
+      "label": "Controllers",
+      "sublabel": "HTTP orchestration",
+      "sources": [
+        { "path": "app/controllers/inventory_controller.py", "line": 1, "label": "Controller layer" }
+      ],
+      "pos": [665, 300],
+      "size": [175, 72]
+    },
+    {
+      "id": "services",
+      "type": "backend",
+      "label": "Services",
+      "sublabel": "Business rules and transactions",
+      "sources": [
+        { "path": "app/services/inventory_service.py", "line": 1, "label": "Service layer" }
+      ],
+      "pos": [885, 300],
+      "size": [185, 72]
+    },
+    {
+      "id": "models",
+      "type": "database",
+      "label": "SQLAlchemy models",
+      "sublabel": "Persistent domain entities",
+      "sources": [
+        { "path": "app/models/product.py", "line": 1, "label": "Model layer" },
+        { "path": "app/extensions.py", "line": 4, "end_line": 8, "label": "SQLAlchemy extension" }
+      ],
+      "pos": [1120, 300],
+      "size": [185, 72]
+    },
+    {
+      "id": "mysql",
+      "type": "database",
+      "label": "MySQL 8",
+      "sublabel": "PyMySQL connection",
+      "sources": [
+        { "path": "requirements.txt", "line": 5, "label": "Database driver" },
+        { "path": "app/config.py", "line": 52, "end_line": 62, "label": "Database configuration" }
+      ],
+      "pos": [1120, 505],
+      "size": [185, 72]
+    },
+    {
+      "id": "private-storage",
+      "type": "security",
+      "label": "Private file storage",
+      "sublabel": "Uploads and import staging",
+      "sources": [
+        { "path": "app/services/upload_service.py", "line": 1, "label": "Upload paths" },
+        { "path": "app/routes/media.py", "line": 1, "end_line": 30, "label": "Controlled media access" }
+      ],
+      "pos": [885, 505],
+      "size": [185, 72]
+    },
+    {
+      "id": "cdn-assets",
+      "type": "external",
+      "label": "Frontend CDNs",
+      "sublabel": "Tabler and Chart.js",
+      "sources": [
+        { "path": "app/templates/base_app.html", "line": 8, "end_line": 9, "label": "Tabler assets" },
+        { "path": "app/templates/dashboard.html", "line": 329, "label": "Chart.js asset" }
+      ],
+      "pos": [225, 85],
+      "size": [175, 72]
+    },
+    {
+      "id": "google-oidc",
+      "type": "external",
+      "label": "Google OIDC",
+      "sublabel": "Optional federated login",
+      "sources": [
+        { "path": "app/services/google_auth_service.py", "line": 1, "end_line": 26, "label": "OIDC client registration" },
+        { "path": "app/routes/auth.py", "line": 36, "end_line": 40, "label": "Login and callback routes" }
+      ],
+      "pos": [445, 85],
+      "size": [175, 72]
+    },
+    {
+      "id": "smtp-server",
+      "type": "external",
+      "label": "SMTP server",
+      "sublabel": "Optional outbound email",
+      "sources": [
+        { "path": "app/services/email_service.py", "line": 1, "end_line": 15, "label": "SMTP delivery service" },
+        { "path": "app/config.py", "line": 32, "end_line": 44, "label": "Email configuration" }
+      ],
+      "pos": [885, 85],
+      "size": [185, 72]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Flask application boundary",
+      "wraps": ["jinja-ui", "flask-app", "controllers", "services", "models"],
+      "pad": 18
+    }
+  ],
+  "connections": [
+    { "id": "browser-to-ui", "from": "browser", "to": "jinja-ui", "label": "pages and browser events", "variant": "emphasis", "labelAt": [203, 386] },
+    { "id": "ui-to-flask", "from": "jinja-ui", "to": "flask-app", "label": "forms and fetch requests", "labelAt": [423, 386] },
+    { "id": "flask-to-controllers", "from": "flask-app", "to": "controllers", "label": "blueprint dispatch", "labelAt": [643, 386] },
+    { "id": "controllers-to-services", "from": "controllers", "to": "services", "label": "validated operations", "labelAt": [863, 296] },
+    { "id": "services-to-models", "from": "services", "to": "models", "label": "business rules and transactions", "labelAt": [1095, 386] },
+    { "id": "models-to-mysql", "from": "models", "to": "mysql", "label": "SQL via PyMySQL", "labelAt": [1213, 430] },
+    { "id": "services-to-storage", "from": "services", "to": "private-storage", "label": "controlled file access", "variant": "security", "labelAt": [978, 430] },
+    { "id": "cdn-to-ui", "from": "cdn-assets", "to": "jinja-ui", "label": "versioned browser assets", "variant": "dashed", "labelAt": [313, 215] },
+    { "id": "google-to-flask", "from": "google-oidc", "to": "flask-app", "label": "OpenID Connect", "variant": "dashed", "labelAt": [533, 215] },
+    { "id": "services-to-smtp", "from": "services", "to": "smtp-server", "label": "SMTP with TLS or SSL", "variant": "dashed", "fromSide": "top", "toSide": "bottom" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Server-rendered request path",
+      "items": ["Jinja templates remain the UI boundary", "Blueprints delegate to controllers and services"]
+    },
+    {
+      "dot": "emerald",
+      "title": "Protected state",
+      "items": ["SQLAlchemy persists business entities in MySQL", "Private files stay behind controlled application routes"]
+    }
+  ]
+}
