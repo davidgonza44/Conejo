@@ -14,17 +14,8 @@ echo "==> Instalando paquetes del sistema (mysql-server, python3-venv)"
 sudo apt-get update -qq
 sudo apt-get install -y -qq mysql-server python3-venv python3-pip
 
-echo "==> Preparando directorio de runtime y arrancando MySQL para la inicialización"
-sudo mkdir -p /var/run/mysqld
-sudo chown mysql:mysql /var/run/mysqld
-if ! sudo mysqladmin ping >/dev/null 2>&1; then
-  sudo rm -f /var/lib/mysql/*.pid /var/run/mysqld/*.pid /var/run/mysqld/*.sock 2>/dev/null || true
-fi
-sudo service mysql start
-for _ in $(seq 1 60); do
-  sudo mysqladmin ping >/dev/null 2>&1 && break
-  sleep 1
-done
+echo "==> Arrancando MySQL para la inicialización"
+bash .cursor/mysql_boot.sh
 
 echo "==> Creando usuario de base de datos de desarrollo (idempotente)"
 sudo mysql <<'SQL'
@@ -49,10 +40,9 @@ echo "==> Inicializando base de datos, tablas y datos semilla (idempotente)"
 ./venv/bin/python scripts/init_db.py
 
 # Se detiene MySQL de forma limpia para que el snapshot generado por el build
-# quede con un directorio de datos consistente (evita fallos de arranque en
-# los pods que booteen desde el snapshot). El comando `start` lo vuelve a
+# quede con un directorio de datos consistente. El comando `start` lo vuelve a
 # levantar en cada boot.
 echo "==> Deteniendo MySQL de forma limpia (datadir consistente para el snapshot)"
-sudo service mysql stop || true
+sudo mysqladmin shutdown 2>/dev/null || true
 
 echo "==> Setup completado."
