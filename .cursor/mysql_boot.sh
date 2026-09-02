@@ -22,8 +22,11 @@ if sudo mysqladmin ping >/dev/null 2>&1; then
   exit 0
 fi
 
+# --innodb-use-native-aio=0: el AIO nativo de InnoDB (libaio io_submit) no es
+#   compatible con el sandbox/overlay de los pods y provoca "Operating system
+#   error number 22" al arrancar. Con AIO simulado (pread/pwrite) funciona.
 echo "==> Arrancando mysqld (log en /var/run/mysqld/mysqld.err)"
-sudo -u mysql bash -c 'nohup /usr/sbin/mysqld --user=mysql --log-error=/var/run/mysqld/mysqld.err >/dev/null 2>&1 &'
+sudo -u mysql bash -c 'nohup /usr/sbin/mysqld --user=mysql --innodb-use-native-aio=0 --log-error=/var/run/mysqld/mysqld.err >/dev/null 2>&1 &'
 
 for _ in $(seq 1 90); do
   if sudo mysqladmin ping >/dev/null 2>&1; then
