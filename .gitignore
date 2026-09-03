@@ -21,6 +21,9 @@ node_modules/
 # Indice y estado local de CodeGraph
 .codegraph/
 
+# Indice local de zvec-grep
+.zvec-grep/
+
 # Salidas generadas por Repomix
 repomix-output.*
 
