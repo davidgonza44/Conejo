@@ -17,6 +17,7 @@ import {
   APPROVED_MODEL,
   APPROVED_PROVIDER,
   REPO_ROOT,
+  REQUIRED_REPOMIXIGNORE_EXCLUSIONS,
   runZgPreflight,
 } from "./zg_preflight.mjs";
 
@@ -31,14 +32,32 @@ const ZG_STORAGE = await import(
 const SECRET = "ZG_PREFLIGHT_SECRET_VALUE_9f3a";
 const REMOTE_ENDPOINT = "https://example.test/embeddings?token=should-not-leak";
 
+function privacyPolicyLines({ omit = [], extra = [], negation = [], comments = false } = {}) {
+  const required = REQUIRED_REPOMIXIGNORE_EXCLUSIONS.filter((rule) => !omit.includes(rule));
+  return [
+    ...(comments ? ["# privacy boundary", "", "# trailing comment after blanks"] : []),
+    ...required,
+    ...extra,
+    ...negation,
+    "",
+  ];
+}
+
+async function writePrivacyPolicy(root, options = {}) {
+  const joiner = options.crlf ? "\r\n" : "\n";
+  await writeFile(join(root, ".repomixignore"), privacyPolicyLines(options).join(joiner));
+}
+
 async function createWorkspace() {
   const root = await mkdtemp(join(tmpdir(), "zg-preflight-"));
-  await writeFile(
-    join(root, ".repomixignore"),
-    ["uploads/", "instance/", "private_imports/", "later-private.txt", ""].join("\n"),
-  );
+  await writePrivacyPolicy(root, { extra: ["later-private.txt"] });
   await writeFile(join(root, "keep.ts"), "export const keep = true;\n");
   return root;
+}
+
+function assertNoPrivateDiagnostics(output) {
+  assertNoSecrets(output);
+  assert.doesNotMatch(output, /uploads\/\*\*|instance\/\*\*|private_imports|reports\/generated|tests\/tmp|tests\/\.tmp|90_archivo_no_usar/);
 }
 
 function approvedManifest(root) {
@@ -160,13 +179,82 @@ async function withWorkspace(fn) {
   }
 }
 
-test("missing index passes", async () => {
+test("required privacy exclusions match the repository contract", () => {
+  assert.deepEqual([...REQUIRED_REPOMIXIGNORE_EXCLUSIONS], [
+    ".zvec-grep/",
+    "uploads/**",
+    "instance/**",
+    "private_imports/**",
+    "reports/generated/**",
+    "tests/tmp/**",
+    "tests/.tmp/**",
+    "references/90_archivo_no_usar/**",
+  ]);
+});
+
+test("fresh workspace with valid privacy policy and no index passes", async () => {
   await withWorkspace(async (root) => {
     const result = await capturePreflight(root);
     assert.equal(result.code, 0);
     assert.match(result.stdout, /no existing index/);
     assert.equal(result.stderr, "");
-    assertNoSecrets(`${result.stdout}${result.stderr}`);
+    assertNoPrivateDiagnostics(`${result.stdout}${result.stderr}`);
+  });
+});
+
+test("fresh workspace missing a required privacy exclusion fails", async () => {
+  await withWorkspace(async (root) => {
+    await writePrivacyPolicy(root, { omit: ["instance/**"] });
+    const result = await capturePreflight(root);
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /privacy exclusions/);
+    assertNoPrivateDiagnostics(`${result.stdout}${result.stderr}`);
+  });
+});
+
+test("approved index with a required privacy rule removed fails", async () => {
+  await withWorkspace(async (root) => {
+    await writeApprovedIndex(root);
+    await writePrivacyPolicy(root, { extra: ["later-private.txt"], omit: ["uploads/**"] });
+    const result = await capturePreflight(root);
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /privacy exclusions/);
+    assertNoPrivateDiagnostics(`${result.stdout}${result.stderr}`);
+  });
+});
+
+test("repomixignore negation or re-inclusion rule fails", async () => {
+  await withWorkspace(async (root) => {
+    await writePrivacyPolicy(root, { extra: ["later-private.txt"], negation: ["!keep.ts"] });
+    const result = await capturePreflight(root);
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /negation rule/);
+    assert.doesNotMatch(result.stderr, /keep\.ts/);
+    assertNoPrivateDiagnostics(`${result.stdout}${result.stderr}`);
+  });
+});
+
+test("extra harmless exclusion still passes", async () => {
+  await withWorkspace(async (root) => {
+    await writePrivacyPolicy(root, { extra: ["later-private.txt", "docs/architecture/*.html"] });
+    const result = await capturePreflight(root);
+    assert.equal(result.code, 0);
+    assert.match(result.stdout, /no existing index/);
+    assertNoPrivateDiagnostics(`${result.stdout}${result.stderr}`);
+  });
+});
+
+test("comments, blank lines, and CRLF do not fail a valid privacy policy", async () => {
+  await withWorkspace(async (root) => {
+    await writePrivacyPolicy(root, {
+      extra: ["later-private.txt"],
+      comments: true,
+      crlf: true,
+    });
+    const result = await capturePreflight(root);
+    assert.equal(result.code, 0);
+    assert.match(result.stdout, /no existing index/);
+    assertNoPrivateDiagnostics(`${result.stdout}${result.stderr}`);
   });
 });
 
@@ -327,6 +415,11 @@ test("source of zg:index still keeps preflight plus approved CLI defenses", asyn
   assert.match(pkg.scripts["zg:index"], /--mode direct/);
   assert.match(pkg.scripts["zg:index"], /--embedding local\/potion-code-16m-v2/);
   assert.match(pkg.scripts["zg:index"], /--ignore-file \.repomixignore/);
+  assert.match(pkg.scripts["zg:status"], /npm run zg:preflight && zg status/);
+  assert.match(pkg.scripts["zg:status"], /--mode direct/);
+  assert.match(pkg.scripts["zg:status"], /--check-ready/);
+  assert.equal(pkg.scripts["zg:version"], "zg --version");
+  assert.doesNotMatch(pkg.scripts["zg:version"], /zg:preflight/);
   for (const glob of APPROVED_INSENSITIVE_GLOBS) {
     assert.match(pkg.scripts["zg:index"], new RegExp(glob.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }

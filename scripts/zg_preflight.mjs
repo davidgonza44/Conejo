@@ -27,6 +27,16 @@ export const APPROVED_MODEL = "potion-code-16m-v2";
 export const APPROVED_DIMENSION = 256;
 export const APPROVED_METRIC = "cosine";
 export const APPROVED_IGNORE_FILES = Object.freeze([".repomixignore"]);
+export const REQUIRED_REPOMIXIGNORE_EXCLUSIONS = Object.freeze([
+  ".zvec-grep/",
+  "uploads/**",
+  "instance/**",
+  "private_imports/**",
+  "reports/generated/**",
+  "tests/tmp/**",
+  "tests/.tmp/**",
+  "references/90_archivo_no_usar/**",
+]);
 export const APPROVED_INSENSITIVE_GLOBS = Object.freeze([
   "!**/*.png",
   "!**/*.jpg",
@@ -251,10 +261,31 @@ function assertNoAuthorization(home) {
   }
 }
 
-function assertIgnoreFilePresent(workspaceRoot) {
+function parseIgnoreRules(text) {
+  return text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith("#"));
+}
+
+function assertApprovedIgnorePolicy(workspaceRoot) {
   const ignoreFile = join(workspaceRoot, ".repomixignore");
   if (!existsSync(ignoreFile) || !statSync(ignoreFile).isFile()) {
     fail("current .repomixignore is missing, so stored documents cannot be proven compatible.");
+  }
+  let text;
+  try {
+    text = readFileSync(ignoreFile, "utf8");
+  } catch {
+    fail("current .repomixignore is unreadable, so the privacy boundary cannot be proven.");
+  }
+  const rules = parseIgnoreRules(text);
+  if (rules.some((rule) => rule.startsWith("!"))) {
+    fail("current .repomixignore contains a negation rule that can weaken the privacy boundary.");
+  }
+  const present = new Set(rules);
+  if (REQUIRED_REPOMIXIGNORE_EXCLUSIONS.some((required) => !present.has(required))) {
+    fail("current .repomixignore is missing required privacy exclusions.");
   }
 }
 
@@ -292,6 +323,8 @@ async function assertStoredDocuments(workspaceRoot) {
 
 export async function inspectZgPreflight(workspaceRoot = process.cwd()) {
   const root = resolve(workspaceRoot);
+  assertApprovedIgnorePolicy(root);
+
   const home = join(root, ZG_DIR);
   if (!existsSync(home)) {
     return { ok: true, status: "missing-index" };
@@ -307,7 +340,6 @@ export async function inspectZgPreflight(workspaceRoot = process.cwd()) {
   }
 
   assertNoAuthorization(home);
-  assertIgnoreFilePresent(root);
 
   const manifestPath = join(home, MANIFEST_FILE);
   if (!existsSync(manifestPath)) {
