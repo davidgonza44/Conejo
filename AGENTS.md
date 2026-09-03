@@ -61,7 +61,7 @@ Start with the smallest relevant checks. Never report a check as passed unless i
 git status --short --branch
 git diff --check
 npm run codegraph:doctor
-openspec doctor
+npm run openspec:doctor
 ```
 
 Use `node --check` on each changed JavaScript file. Review the full diff and confirm no secret, private file, generated output, or unrelated change was included.
@@ -86,7 +86,7 @@ python scripts/test_prediction_readiness.py
 
 - `AGENTS.md` owns repository-wide assistant instructions. Cursor rules and tool configuration must point here rather than duplicate it.
 - OpenSpec stores approved requirements, scenarios, design decisions, and acceptance criteria. It does not duplicate this guide or grant implementation approval.
-- Use the existing package scripts for CodeGraph and Repomix. `npm run repomix:pack` writes `repomix-output.xml`; inspect exclusions and sensitive content before running or sharing it.
+- Use the existing package scripts for CodeGraph, Repomix, and OpenSpec. `npm run repomix:pack` writes `repomix-output.xml`; inspect exclusions and sensitive content before running or sharing it.
 - Archify diagrams must reflect repository evidence and exclude private/generated data.
 - Inspect Gentle AI version, help, compatibility, dry-run output, and generated paths before any installation command. Never run `gentle-ai install` blindly.
 - Ponytail reinforces KISS/YAGNI and does not require repository scaffolding. Do not add a tool when an installed or native capability already covers the need.

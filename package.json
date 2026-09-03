@@ -1,11 +1,17 @@
 {
+  "name": "conejo-tooling",
+  "private": true,
   "scripts": {
     "codegraph:doctor": "codegraph doctor",
     "codegraph:orient": "codegraph orient --root . --budget small",
     "codegraph:review": "codegraph review",
+    "openspec:doctor": "openspec doctor",
+    "openspec:validate": "openspec validate --all --strict --no-interactive",
+    "openspec:version": "openspec --version",
     "repomix:pack": "repomix --compress --style xml --output repomix-output.xml"
   },
   "devDependencies": {
+    "@fission-ai/openspec": "1.10.0",
     "@lzehrung/codegraph": "^2.3.10",
     "repomix": "^1.18.0"
   }
