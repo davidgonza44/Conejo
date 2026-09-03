@@ -81,7 +81,7 @@ npm ci
 | Herramienta | Uso y estado en este repositorio | Comando principal | Salida local |
 | --- | --- | --- | --- |
 | AGENTS / Cursor | `AGENTS.md` es la única fuente de reglas; Cursor solo remite a ella. | Leer `AGENTS.md` antes de trabajar | Ninguna |
-| OpenSpec 1.10 | Requisitos y criterios aprobados, sin duplicar reglas de agentes. | `openspec doctor` | `openspec/` versionado |
+| OpenSpec 1.10 | Requisitos y criterios aprobados, sin duplicar reglas de agentes. | `npm run openspec:doctor` | `openspec/` versionado |
 | CodeGraph 2.3.10 | Orientación, impacto y revisión estructural. Doctor y orientación funcionan con la dependencia local. | `npm run codegraph:orient` | `.codegraph/`, ignorada |
 | Repomix 1.18 | Paquete XML comprimido para contexto controlado. | `npm run repomix:pack` | `repomix-output.xml`, ignorado |
 | Archify 2.17 | Diagrama de arquitectura basado en evidencia del repositorio. Se usa el skill ya instalado; no hay dependencia nueva. | Ver comandos siguientes | JSON y HTML bajo `docs/architecture/` |
@@ -192,8 +192,8 @@ Comprobaciones seguras de documentación y herramientas:
 
 ```powershell
 npm run codegraph:doctor
-openspec doctor
-openspec validate --all --strict --no-interactive
+npm run openspec:doctor
+npm run openspec:validate
 git diff --check
 ```
 
