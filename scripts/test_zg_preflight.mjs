@@ -57,7 +57,7 @@ async function createWorkspace() {
 
 function assertNoPrivateDiagnostics(output) {
   assertNoSecrets(output);
-  assert.doesNotMatch(output, /uploads\/\*\*|instance\/\*\*|private_imports|reports\/generated|tests\/tmp|tests\/\.tmp|90_archivo_no_usar/);
+  assert.doesNotMatch(output, /\.env|uploads\/\*\*|instance\/\*\*|private_imports|reports\/generated|tests\/tmp|tests\/\.tmp|90_archivo_no_usar/);
 }
 
 function approvedManifest(root) {
@@ -181,6 +181,8 @@ async function withWorkspace(fn) {
 
 test("required privacy exclusions match the repository contract", () => {
   assert.deepEqual([...REQUIRED_REPOMIXIGNORE_EXCLUSIONS], [
+    ".env",
+    ".env.*",
     ".zvec-grep/",
     "uploads/**",
     "instance/**",
@@ -212,10 +214,41 @@ test("fresh workspace missing a required privacy exclusion fails", async () => {
   });
 });
 
+test("fresh workspace missing .env fails", async () => {
+  await withWorkspace(async (root) => {
+    await writePrivacyPolicy(root, { omit: [".env"] });
+    const result = await capturePreflight(root);
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /privacy exclusions/);
+    assertNoPrivateDiagnostics(`${result.stdout}${result.stderr}`);
+  });
+});
+
+test("fresh workspace missing .env.* fails", async () => {
+  await withWorkspace(async (root) => {
+    await writePrivacyPolicy(root, { omit: [".env.*"] });
+    const result = await capturePreflight(root);
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /privacy exclusions/);
+    assertNoPrivateDiagnostics(`${result.stdout}${result.stderr}`);
+  });
+});
+
 test("approved index with a required privacy rule removed fails", async () => {
   await withWorkspace(async (root) => {
     await writeApprovedIndex(root);
     await writePrivacyPolicy(root, { extra: ["later-private.txt"], omit: ["uploads/**"] });
+    const result = await capturePreflight(root);
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /privacy exclusions/);
+    assertNoPrivateDiagnostics(`${result.stdout}${result.stderr}`);
+  });
+});
+
+test("approved index with .env removed fails", async () => {
+  await withWorkspace(async (root) => {
+    await writeApprovedIndex(root);
+    await writePrivacyPolicy(root, { extra: ["later-private.txt"], omit: [".env"] });
     const result = await capturePreflight(root);
     assert.equal(result.code, 1);
     assert.match(result.stderr, /privacy exclusions/);

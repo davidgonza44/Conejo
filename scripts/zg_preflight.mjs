@@ -28,6 +28,8 @@ export const APPROVED_DIMENSION = 256;
 export const APPROVED_METRIC = "cosine";
 export const APPROVED_IGNORE_FILES = Object.freeze([".repomixignore"]);
 export const REQUIRED_REPOMIXIGNORE_EXCLUSIONS = Object.freeze([
+  ".env",
+  ".env.*",
   ".zvec-grep/",
   "uploads/**",
   "instance/**",
