@@ -11,7 +11,7 @@
     "repomix:pack": "repomix --compress --style xml --output repomix-output.xml",
     "zg:preflight": "node scripts/zg_preflight.mjs",
     "zg:index": "npm run zg:preflight && zg index . --mode direct --embedding local/potion-code-16m-v2 --ignore-file .repomixignore --iglob \"!**/*.png\" --iglob \"!**/*.jpg\" --iglob \"!**/*.jpeg\" --iglob \"!**/*.gif\" --iglob \"!**/*.webp\" --iglob \"!**/*.tif\" --iglob \"!**/*.tiff\" --iglob \"!**/*.vips\"",
-    "zg:status": "zg status . --mode direct --check-ready",
+    "zg:status": "npm run zg:preflight && zg status . --mode direct --check-ready",
     "zg:version": "zg --version"
   },
   "devDependencies": {
