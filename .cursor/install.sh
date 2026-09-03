@@ -31,8 +31,8 @@ ENGRAM_VERSION="v1.20.0"
 NODE_VERSION="v22.23.2"
 PI_PACKAGE="@earendil-works/pi-coding-agent"
 PI_VERSION="0.84.4"
-# Integrity publicada de registry.npmjs.org para PI_PACKAGE@PI_VERSION.
-# Verificar con `npm view ${PI_PACKAGE}@${PI_VERSION} dist.integrity` antes de instalar.
+# SHA-512 SRI of the published registry tarball bytes for PI_PACKAGE@PI_VERSION.
+# Bind installation: npm pack -> hash the actual .tgz -> compare -> install that file.
 PI_NPM_INTEGRITY="sha512-jmOlrqUmvhh/siNWFRXjYLJzhKFIHNsAQaysRwzQPQFnPAaV/vhqHsLH/MBsIISA1Rjj7WTUFR3nJrpXoLx39w=="
 CLOUD_TOOLS_BIN_DIR="/usr/local/bin"
 CLOUD_TOOLS_MAX_ARCHIVE_BYTES="$((128 * 1024 * 1024))"
@@ -310,6 +310,128 @@ cloud_tools_link_cloud_bin() {
   fi
 }
 
+# Pi-only version probe. Never runs `pi version` (prompt-capable). Isolates HOME
+# in a subshell so a RETURN trap cannot clobber the caller's pack-dir cleanup.
+cloud_tools_pi_version_matches() {
+  local binary="$1"
+  local expected="$2"
+  local output reported
+  if [ ! -x "$binary" ]; then
+    return 1
+  fi
+  output="$(
+    probe_home="$(mktemp -d)"
+    trap 'rm -rf "$probe_home"' EXIT
+    HOME="$probe_home" "$binary" --version 2>/dev/null || true
+  )"
+  [ -n "$output" ] || return 1
+  reported="$(cloud_tools_version_token "$output")" || return 1
+  [ -n "$reported" ] && [ "$reported" = "${expected#v}" ]
+}
+
+cloud_tools_assert_pinned_pi_on_path() {
+  local prefix_pi="$1"
+  local pi_path resolved expected
+  hash -r
+  pi_path="$(command -v pi || true)"
+  if [ -z "$pi_path" ]; then
+    cloud_tools_fail "pi no quedó en PATH"
+  fi
+  if [ "$pi_path" = "/exec-daemon/pi" ]; then
+    cloud_tools_fail "pi resolvió a /exec-daemon/pi; el enlace controlado no tiene precedencia"
+  fi
+  if [ ! -x "$pi_path" ]; then
+    cloud_tools_fail "pi en ${pi_path} no es ejecutable"
+  fi
+  if [ ! -x "$prefix_pi" ]; then
+    cloud_tools_fail "no hay pi en el prefijo Node fijado (${prefix_pi})"
+  fi
+  if [ ! -x /usr/bin/readlink ]; then
+    cloud_tools_fail "readlink no está disponible para resolver pi"
+  fi
+  resolved="$(/usr/bin/readlink -f "$pi_path")" || resolved=""
+  expected="$(/usr/bin/readlink -f "$prefix_pi")" || expected=""
+  if [ -z "$resolved" ] || [ -z "$expected" ]; then
+    cloud_tools_fail "no se pudo resolver el destino de pi (${pi_path} / ${prefix_pi})"
+  fi
+  case "$resolved" in
+    /exec-daemon/*)
+      cloud_tools_fail "pi resuelve a ${resolved}"
+      ;;
+  esac
+  if [ "$resolved" != "$expected" ]; then
+    cloud_tools_fail "pi en PATH (${pi_path} -> ${resolved}) no es el binario del prefijo fijado (${expected})"
+  fi
+}
+
+cloud_tools_assert_ready_pi() {
+  local prefix_pi="$1"
+  local pi_path
+  cloud_tools_assert_pinned_pi_on_path "$prefix_pi"
+  pi_path="$(command -v pi || true)"
+  if ! cloud_tools_pi_version_matches "$pi_path" "$PI_VERSION"; then
+    cloud_tools_fail "pi en PATH no reporta ${PI_VERSION} con --version"
+  fi
+}
+
+cloud_tools_sha512_sri() {
+  local file="$1"
+  local node_bin="$2"
+  local sri
+  if [ ! -f "$file" ] || [ ! -s "$file" ]; then
+    cloud_tools_fail "no hay bytes para calcular SRI: ${file}"
+  fi
+  if [ ! -x "$node_bin" ]; then
+    cloud_tools_fail "Node fijado no es ejecutable: ${node_bin}"
+  fi
+  sri="$(CLOUD_TOOLS_SRI_FILE="$file" "$node_bin" --input-type=commonjs -e '
+const fs = require("fs");
+const crypto = require("crypto");
+const target = process.env.CLOUD_TOOLS_SRI_FILE;
+const buf = fs.readFileSync(target);
+process.stdout.write("sha512-" + crypto.createHash("sha512").update(buf).digest("base64"));
+')" || cloud_tools_fail "no se pudo calcular SHA-512 SRI con ${node_bin}"
+  if [ -z "$sri" ]; then
+    cloud_tools_fail "SHA-512 SRI vacío para ${file}"
+  fi
+  printf '%s' "$sri"
+}
+
+cloud_tools_pi_install_verified_tarball() {
+  local npm_bin="$1"
+  local prefix="$2"
+  local tarball="$3"
+  if [ ! -f "$tarball" ]; then
+    cloud_tools_fail "solo se instala el tarball verificado; no existe ${tarball}"
+  fi
+  case "$tarball" in
+    *.tgz|*.tar.gz) ;;
+    *)
+      cloud_tools_fail "solo se instala el tarball verificado; se rechaza ${tarball}"
+      ;;
+  esac
+  if [ -w "$prefix" ]; then
+    "$npm_bin" install -g --prefix "$prefix" --ignore-scripts "$tarball"
+  else
+    echo "==> El prefix npm global no es escribible; se usa sudo"
+    sudo "$npm_bin" install -g --prefix "$prefix" --ignore-scripts "$tarball"
+  fi
+}
+
+cloud_tools_publish_pinned_pi() {
+  local prefix_pi="$1"
+  local dest="$2"
+  if [ ! -x "$prefix_pi" ]; then
+    cloud_tools_fail "npm install no dejó el binario pi en ${prefix_pi}"
+  fi
+  sudo ln -sfn "$prefix_pi" "$dest"
+  cloud_tools_link_cloud_bin "$dest" || cloud_tools_fail "No se pudo publicar ${dest} en PATH"
+  if [ -d /usr/local/cargo/bin ] && [ ! -e /usr/local/cargo/bin/pi ]; then
+    cloud_tools_fail "no se publicó pi en /usr/local/cargo/bin"
+  fi
+  cloud_tools_assert_ready_pi "$prefix_pi"
+}
+
 install_pinned_pi() {
   echo "==> Instalando Pi ${PI_PACKAGE}@${PI_VERSION} (npm --ignore-scripts)"
 
@@ -343,72 +465,57 @@ install_pinned_pi() {
 
   local prefix="/usr/local/lib/nodejs/node-${NODE_VERSION}"
   local npm_bin="${prefix}/bin/npm"
+  local prefix_node="${prefix}/bin/node"
   local prefix_pi="${prefix}/bin/pi"
   local dest="${CLOUD_TOOLS_BIN_DIR}/pi"
   if [ ! -x "$npm_bin" ]; then
     cloud_tools_fail "No se encontró el npm fijado en ${npm_bin}"
   fi
+  if [ ! -x "$prefix_node" ]; then
+    cloud_tools_fail "No se encontró el node fijado en ${prefix_node}"
+  fi
 
-  # Pi --version crea ~/.pi si HOME apunta al usuario. Aislar el probe
-  # evita auth.json y sesiones en el home del Cloud Agent.
-  local pi_probe_home
-  pi_probe_home="$(mktemp -d)"
-  # shellcheck disable=SC2064
-  trap "rm -rf '$pi_probe_home'" RETURN
-
-  if HOME="$pi_probe_home" cloud_tools_version_matches "$dest" "$PI_VERSION" \
-    || { [ -x "$prefix_pi" ] && HOME="$pi_probe_home" cloud_tools_version_matches "$prefix_pi" "$PI_VERSION"; }; then
-    if [ -x "$prefix_pi" ] && [ ! -e "$dest" ]; then
-      sudo ln -sfn "$prefix_pi" "$dest"
-    fi
-    cloud_tools_link_cloud_bin "$dest" || true
-    hash -r
-    echo "==> Pi ${PI_VERSION} ya está instalado; se reutiliza ($(command -v pi || echo "$dest"))."
+  if [ -x "$prefix_pi" ] && cloud_tools_pi_version_matches "$prefix_pi" "$PI_VERSION"; then
+    cloud_tools_publish_pinned_pi "$prefix_pi" "$dest"
+    echo "==> Pi ${PI_VERSION} ya está instalado; se reutiliza ($(command -v pi))."
     return 0
   fi
 
-  echo "==> Verificando integrity publicada de ${PI_PACKAGE}@${PI_VERSION}"
-  local published_name published_integrity
-  published_name="$("$npm_bin" view "${PI_PACKAGE}@${PI_VERSION}" name)"
-  published_integrity="$("$npm_bin" view "${PI_PACKAGE}@${PI_VERSION}" dist.integrity)"
-  if [ "$published_name" != "$PI_PACKAGE" ]; then
-    cloud_tools_fail "npm view reportó el paquete ${published_name}; se esperaba ${PI_PACKAGE}"
-  fi
-  if [ -z "$published_integrity" ]; then
-    cloud_tools_fail "npm view no devolvió dist.integrity para ${PI_PACKAGE}@${PI_VERSION}"
-  fi
-  if [ "$published_integrity" != "$PI_NPM_INTEGRITY" ]; then
-    cloud_tools_fail "Integrity de ${PI_PACKAGE}@${PI_VERSION} no coincide (publicada ${published_integrity}; fijada ${PI_NPM_INTEGRITY})"
-  fi
-  echo "==> Integrity publicada verificada: ${published_integrity}"
+  echo "==> Empaquetando ${PI_PACKAGE}@${PI_VERSION} y verificando SRI del tarball"
+  local pack_dir tgz candidate sri
+  pack_dir="$(mktemp -d)"
+  # EXIT covers cloud_tools_fail; RETURN covers a successful return.
+  # shellcheck disable=SC2064
+  trap "rm -rf '$pack_dir'" RETURN EXIT
 
-  local npm_global_root
-  npm_global_root="$("$npm_bin" prefix -g)/lib/node_modules"
-  if [ -w "$npm_global_root" ]; then
-    "$npm_bin" install -g --prefix "$prefix" --ignore-scripts "${PI_PACKAGE}@${PI_VERSION}"
-  else
-    echo "==> El prefix npm global no es escribible; se usa sudo"
-    sudo "$npm_bin" install -g --prefix "$prefix" --ignore-scripts "${PI_PACKAGE}@${PI_VERSION}"
+  (
+    cd "$pack_dir"
+    npm_config_ignore_scripts=true "$npm_bin" pack "${PI_PACKAGE}@${PI_VERSION}" \
+      --pack-destination "$pack_dir"
+  ) || cloud_tools_fail "npm pack falló para ${PI_PACKAGE}@${PI_VERSION}"
+
+  tgz=""
+  for candidate in "$pack_dir"/*.tgz; do
+    if [ ! -f "$candidate" ]; then
+      continue
+    fi
+    if [ -n "$tgz" ]; then
+      cloud_tools_fail "npm pack escribió más de un tarball en ${pack_dir}"
+    fi
+    tgz="$candidate"
+  done
+  if [ -z "$tgz" ]; then
+    cloud_tools_fail "npm pack no escribió un tarball en ${pack_dir}"
   fi
 
-  if [ ! -x "$prefix_pi" ]; then
-    cloud_tools_fail "npm install no dejó el binario pi en ${prefix_pi}"
+  sri="$(cloud_tools_sha512_sri "$tgz" "$prefix_node")"
+  if [ "$sri" != "$PI_NPM_INTEGRITY" ]; then
+    cloud_tools_fail "Integrity del tarball no coincide (calculada ${sri}; fijada ${PI_NPM_INTEGRITY})"
   fi
-  sudo ln -sfn "$prefix_pi" "$dest"
-  cloud_tools_link_cloud_bin "$dest" || cloud_tools_fail "No se pudo publicar ${dest} en PATH"
-  hash -r
+  echo "==> SRI del tarball verificado: ${sri}"
 
-  local pi_path
-  pi_path="$(command -v pi || true)"
-  if [ -z "$pi_path" ]; then
-    cloud_tools_fail "pi no quedó en PATH tras la instalación"
-  fi
-  if [ "$pi_path" = "/exec-daemon/pi" ]; then
-    cloud_tools_fail "pi resolvió a /exec-daemon/pi; el enlace controlado no tiene precedencia"
-  fi
-  if ! HOME="$pi_probe_home" cloud_tools_version_matches "$pi_path" "$PI_VERSION"; then
-    cloud_tools_fail "pi quedó en ${pi_path} pero no reporta la versión ${PI_VERSION}"
-  fi
+  cloud_tools_pi_install_verified_tarball "$npm_bin" "$prefix" "$tgz"
+  cloud_tools_publish_pinned_pi "$prefix_pi" "$dest"
 
   local verify_node verify_npm
   verify_node="$(node --version 2>/dev/null || true)"
@@ -417,7 +524,7 @@ install_pinned_pi() {
     cloud_tools_fail "Tras instalar Pi, Node/npm ya no coinciden (${verify_node:-?} / ${verify_npm:-?})"
   fi
 
-  echo "==> Pi ${PI_PACKAGE}@${PI_VERSION} instalado en ${pi_path}"
+  echo "==> Pi ${PI_PACKAGE}@${PI_VERSION} instalado desde tarball verificado en $(command -v pi)"
 }
 
 install_repo_npm_tooling() {

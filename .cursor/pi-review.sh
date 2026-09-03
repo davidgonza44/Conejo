@@ -51,7 +51,7 @@ if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
   exit 0
 fi
 
-if [ "${1:-}" != "--check" ]; then
+if [ "$#" -ne 1 ] || [ "$1" != "--check" ]; then
   usage >&2
   echo "!! Fase 1: solo está aprobado --check. No se invocará Pi con un prompt." >&2
   exit 2
