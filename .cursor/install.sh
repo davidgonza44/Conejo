@@ -4,6 +4,7 @@
 # - Crea el entorno virtual e instala dependencias.
 # - Arranca MySQL (datadir en tmpfs) y siembra la base de datos.
 # - Instala Node.js 22 fijado (>=22.16) y binarios Gentle AI/Engram en /usr/local/bin.
+# - Tras Node v22.23.2, ejecuta npm ci (CodeGraph, Repomix, OpenSpec locales).
 #
 # Nota: el datadir de MySQL vive en tmpfs (ver .cursor/mysql_boot.sh), por lo
 # que NO persiste en el snapshot. El comando `start` vuelve a inicializarlo y
@@ -290,6 +291,26 @@ install_pinned_nodejs() {
   fi
 }
 
+install_repo_npm_tooling() {
+  echo "==> Instalando dependencias npm del repositorio (CodeGraph, Repomix, OpenSpec)"
+  hash -r
+  local node_path npm_path node_ver
+  node_path="$(command -v node || true)"
+  npm_path="$(command -v npm || true)"
+  node_ver="$(node --version 2>/dev/null || true)"
+  if [ "$node_ver" != "$NODE_VERSION" ]; then
+    cloud_tools_fail "npm ci requiere Node ${NODE_VERSION}; se encontró ${node_ver:-ninguno} (${node_path:-sin node})"
+  fi
+  if [ "$node_path" = "/exec-daemon/node" ] || [ "$npm_path" = "/exec-daemon/npm" ]; then
+    cloud_tools_fail "npm ci no debe usar /exec-daemon/node"
+  fi
+  if [ -z "$npm_path" ]; then
+    cloud_tools_fail "npm no está en PATH para npm ci"
+  fi
+  npm ci
+  echo "==> npm ci completado con ${node_path} ${node_ver}"
+}
+
 install_cloud_agent_tools() {
   echo "==> Instalando herramientas fijadas de Cloud Agents (Node ${NODE_VERSION}, Gentle AI ${GENTLE_AI_VERSION}, Engram ${ENGRAM_VERSION})"
 
@@ -338,6 +359,7 @@ install_cloud_agent_tools() {
     "$engram_sha"
 
   echo "==> Binarios Cloud: $(command -v gentle-ai) $(command -v engram)"
+  install_repo_npm_tooling
 }
 
 install_application_runtime() {
