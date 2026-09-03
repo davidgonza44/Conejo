@@ -54,15 +54,38 @@ cloud_tools_linux_arch() {
   esac
 }
 
+# First whitespace-delimited token that looks like a version. A leading "v"
+# is stripped; prerelease/build suffixes are kept so 1.20.0-rc.1 != 1.20.0.
+cloud_tools_version_token() {
+  local output="$1"
+  local token
+  # shellcheck disable=SC2086
+  for token in $output; do
+    case "$token" in
+      v[0-9]*.[0-9]*)
+        printf '%s' "${token#v}"
+        return 0
+        ;;
+      [0-9]*.[0-9]*)
+        printf '%s' "$token"
+        return 0
+        ;;
+    esac
+  done
+  return 1
+}
+
 cloud_tools_version_matches() {
   local binary="$1"
   local expected="$2"
-  local output
+  local output reported
   if [ ! -x "$binary" ]; then
     return 1
   fi
   output="$("$binary" version 2>/dev/null || "$binary" --version 2>/dev/null || true)"
-  [ -n "$output" ] && printf '%s' "$output" | grep -Fq "$expected"
+  [ -n "$output" ] || return 1
+  reported="$(cloud_tools_version_token "$output")" || return 1
+  [ -n "$reported" ] && [ "$reported" = "${expected#v}" ]
 }
 
 cloud_tools_download() {
@@ -227,6 +250,16 @@ install_pinned_nodejs() {
     sudo rm -rf "$staged"
     sudo mkdir -p /usr/local/lib/nodejs
     sudo mv "$extracted" "$staged"
+    # Harden staging before the live swap: ubuntu-owned extract must not
+    # become the published prefix. Symlink modes are left alone.
+    sudo chown -R root:root "$staged"
+    sudo find "$staged" ! -type l -perm /022 -exec chmod go-w {} +
+    if [ -n "$(sudo find "$staged" \( ! -user root -o ! -group root \) -print)" ]; then
+      cloud_tools_fail "El prefijo Node en staging no quedó root:root"
+    fi
+    if [ -n "$(sudo find "$staged" ! -type l -perm /022 -print)" ]; then
+      cloud_tools_fail "El prefijo Node en staging tiene escritura para group/others"
+    fi
     sudo rm -rf "$prefix"
     sudo mv "$staged" "$prefix"
 
@@ -326,6 +359,11 @@ install_application_runtime() {
   bash .cursor/mysql_boot.sh
   ./venv/bin/python scripts/init_db.py
 }
+
+# Sourced by the isolated version-match test; do not install.
+if [ "${BASH_SOURCE[0]}" != "$0" ]; then
+  return 0
+fi
 
 if [ "${1:-}" = "--cloud-tools-only" ]; then
   install_cloud_agent_tools
