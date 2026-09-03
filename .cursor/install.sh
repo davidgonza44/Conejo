@@ -3,16 +3,18 @@
 # - Instala MySQL 8 y utilidades de Python (paquetes del sistema).
 # - Crea el entorno virtual e instala dependencias.
 # - Arranca MySQL (datadir en tmpfs) y siembra la base de datos.
-# - Instala Node.js 22 fijado (>=22.16) y binarios Gentle AI/Engram en /usr/local/bin.
+# - Instala Node.js 22 fijado (>=22.16), binarios Gentle AI/Engram y Pi 0.84.4.
 # - Tras Node v22.23.2, ejecuta npm ci (CodeGraph, Repomix, OpenSpec locales).
 #
 # Nota: el datadir de MySQL vive en tmpfs (ver .cursor/mysql_boot.sh), por lo
 # que NO persiste en el snapshot. El comando `start` vuelve a inicializarlo y
 # a sembrarlo en cada arranque; aquí se ejecuta también para validar el setup.
 #
-# Gentle AI y Engram se instalan como software del Build, no como memoria
+# Gentle AI, Engram y Pi se instalan como software del Build, no como memoria
 # precargada ni como una segunda fuente de reglas. No se ejecutan presets,
 # `gentle-ai install`, `engram setup`, ni `engram mcp`.
+# Pi se instala pinneado (@earendil-works/pi-coding-agent@0.84.4, --ignore-scripts).
+# No se instalan gentle-pi ni paquetes companion, ni se configura MCP/subagents.
 #
 # Uso aislado (sin MySQL ni semilla de la aplicación):
 #   bash .cursor/install.sh --cloud-tools-only
@@ -27,6 +29,11 @@ export DEBIAN_FRONTEND=noninteractive
 GENTLE_AI_VERSION="v2.5.0"
 ENGRAM_VERSION="v1.20.0"
 NODE_VERSION="v22.23.2"
+PI_PACKAGE="@earendil-works/pi-coding-agent"
+PI_VERSION="0.84.4"
+# Integrity publicada de registry.npmjs.org para PI_PACKAGE@PI_VERSION.
+# Verificar con `npm view ${PI_PACKAGE}@${PI_VERSION} dist.integrity` antes de instalar.
+PI_NPM_INTEGRITY="sha512-jmOlrqUmvhh/siNWFRXjYLJzhKFIHNsAQaysRwzQPQFnPAaV/vhqHsLH/MBsIISA1Rjj7WTUFR3nJrpXoLx39w=="
 CLOUD_TOOLS_BIN_DIR="/usr/local/bin"
 CLOUD_TOOLS_MAX_ARCHIVE_BYTES="$((128 * 1024 * 1024))"
 
@@ -291,6 +298,128 @@ install_pinned_nodejs() {
   fi
 }
 
+cloud_tools_link_cloud_bin() {
+  local dest="$1"
+  local name
+  name="$(basename "$dest")"
+  if [ ! -e "$dest" ]; then
+    return 1
+  fi
+  if [ -d /usr/local/cargo/bin ]; then
+    sudo ln -sfn "$dest" "/usr/local/cargo/bin/${name}"
+  fi
+}
+
+install_pinned_pi() {
+  echo "==> Instalando Pi ${PI_PACKAGE}@${PI_VERSION} (npm --ignore-scripts)"
+
+  if [ "$PI_PACKAGE" != "@earendil-works/pi-coding-agent" ]; then
+    cloud_tools_fail "PI_PACKAGE debe ser @earendil-works/pi-coding-agent; se rechaza ${PI_PACKAGE}"
+  fi
+  case "$PI_VERSION" in
+    ""|latest|main|master|next)
+      cloud_tools_fail "PI_VERSION debe ser exacta; se rechaza ${PI_VERSION:-vacío}"
+      ;;
+  esac
+
+  hash -r
+  local node_path npm_path node_ver npm_ver
+  node_path="$(command -v node || true)"
+  npm_path="$(command -v npm || true)"
+  node_ver="$(node --version 2>/dev/null || true)"
+  npm_ver="$(npm --version 2>/dev/null || true)"
+  if [ "$node_ver" != "$NODE_VERSION" ]; then
+    cloud_tools_fail "Pi requiere Node ${NODE_VERSION}; se encontró ${node_ver:-ninguno} (${node_path:-sin node})"
+  fi
+  if [ "$npm_ver" != "10.9.8" ]; then
+    cloud_tools_fail "Pi requiere npm 10.9.8 del Node fijado; se encontró ${npm_ver:-ninguno} (${npm_path:-sin npm})"
+  fi
+  if [ "$node_path" = "/exec-daemon/node" ] || [ "$npm_path" = "/exec-daemon/npm" ]; then
+    cloud_tools_fail "Pi no debe instalarse con /exec-daemon/node o /exec-daemon/npm"
+  fi
+  if [ -z "$npm_path" ]; then
+    cloud_tools_fail "npm no está en PATH para instalar Pi"
+  fi
+
+  local prefix="/usr/local/lib/nodejs/node-${NODE_VERSION}"
+  local npm_bin="${prefix}/bin/npm"
+  local prefix_pi="${prefix}/bin/pi"
+  local dest="${CLOUD_TOOLS_BIN_DIR}/pi"
+  if [ ! -x "$npm_bin" ]; then
+    cloud_tools_fail "No se encontró el npm fijado en ${npm_bin}"
+  fi
+
+  # Pi --version crea ~/.pi si HOME apunta al usuario. Aislar el probe
+  # evita auth.json y sesiones en el home del Cloud Agent.
+  local pi_probe_home
+  pi_probe_home="$(mktemp -d)"
+  # shellcheck disable=SC2064
+  trap "rm -rf '$pi_probe_home'" RETURN
+
+  if HOME="$pi_probe_home" cloud_tools_version_matches "$dest" "$PI_VERSION" \
+    || { [ -x "$prefix_pi" ] && HOME="$pi_probe_home" cloud_tools_version_matches "$prefix_pi" "$PI_VERSION"; }; then
+    if [ -x "$prefix_pi" ] && [ ! -e "$dest" ]; then
+      sudo ln -sfn "$prefix_pi" "$dest"
+    fi
+    cloud_tools_link_cloud_bin "$dest" || true
+    hash -r
+    echo "==> Pi ${PI_VERSION} ya está instalado; se reutiliza ($(command -v pi || echo "$dest"))."
+    return 0
+  fi
+
+  echo "==> Verificando integrity publicada de ${PI_PACKAGE}@${PI_VERSION}"
+  local published_name published_integrity
+  published_name="$("$npm_bin" view "${PI_PACKAGE}@${PI_VERSION}" name)"
+  published_integrity="$("$npm_bin" view "${PI_PACKAGE}@${PI_VERSION}" dist.integrity)"
+  if [ "$published_name" != "$PI_PACKAGE" ]; then
+    cloud_tools_fail "npm view reportó el paquete ${published_name}; se esperaba ${PI_PACKAGE}"
+  fi
+  if [ -z "$published_integrity" ]; then
+    cloud_tools_fail "npm view no devolvió dist.integrity para ${PI_PACKAGE}@${PI_VERSION}"
+  fi
+  if [ "$published_integrity" != "$PI_NPM_INTEGRITY" ]; then
+    cloud_tools_fail "Integrity de ${PI_PACKAGE}@${PI_VERSION} no coincide (publicada ${published_integrity}; fijada ${PI_NPM_INTEGRITY})"
+  fi
+  echo "==> Integrity publicada verificada: ${published_integrity}"
+
+  local npm_global_root
+  npm_global_root="$("$npm_bin" prefix -g)/lib/node_modules"
+  if [ -w "$npm_global_root" ]; then
+    "$npm_bin" install -g --prefix "$prefix" --ignore-scripts "${PI_PACKAGE}@${PI_VERSION}"
+  else
+    echo "==> El prefix npm global no es escribible; se usa sudo"
+    sudo "$npm_bin" install -g --prefix "$prefix" --ignore-scripts "${PI_PACKAGE}@${PI_VERSION}"
+  fi
+
+  if [ ! -x "$prefix_pi" ]; then
+    cloud_tools_fail "npm install no dejó el binario pi en ${prefix_pi}"
+  fi
+  sudo ln -sfn "$prefix_pi" "$dest"
+  cloud_tools_link_cloud_bin "$dest" || cloud_tools_fail "No se pudo publicar ${dest} en PATH"
+  hash -r
+
+  local pi_path
+  pi_path="$(command -v pi || true)"
+  if [ -z "$pi_path" ]; then
+    cloud_tools_fail "pi no quedó en PATH tras la instalación"
+  fi
+  if [ "$pi_path" = "/exec-daemon/pi" ]; then
+    cloud_tools_fail "pi resolvió a /exec-daemon/pi; el enlace controlado no tiene precedencia"
+  fi
+  if ! HOME="$pi_probe_home" cloud_tools_version_matches "$pi_path" "$PI_VERSION"; then
+    cloud_tools_fail "pi quedó en ${pi_path} pero no reporta la versión ${PI_VERSION}"
+  fi
+
+  local verify_node verify_npm
+  verify_node="$(node --version 2>/dev/null || true)"
+  verify_npm="$(npm --version 2>/dev/null || true)"
+  if [ "$verify_node" != "$NODE_VERSION" ] || [ "$verify_npm" != "10.9.8" ]; then
+    cloud_tools_fail "Tras instalar Pi, Node/npm ya no coinciden (${verify_node:-?} / ${verify_npm:-?})"
+  fi
+
+  echo "==> Pi ${PI_PACKAGE}@${PI_VERSION} instalado en ${pi_path}"
+}
+
 install_repo_npm_tooling() {
   echo "==> Instalando dependencias npm del repositorio (CodeGraph, Repomix, OpenSpec)"
   hash -r
@@ -312,7 +441,7 @@ install_repo_npm_tooling() {
 }
 
 install_cloud_agent_tools() {
-  echo "==> Instalando herramientas fijadas de Cloud Agents (Node ${NODE_VERSION}, Gentle AI ${GENTLE_AI_VERSION}, Engram ${ENGRAM_VERSION})"
+  echo "==> Instalando herramientas fijadas de Cloud Agents (Node ${NODE_VERSION}, Gentle AI ${GENTLE_AI_VERSION}, Engram ${ENGRAM_VERSION}, Pi ${PI_VERSION})"
 
   if [ "$(uname -s)" != "Linux" ]; then
     cloud_tools_fail "Gentle AI/Engram del Cloud Build solo se instalan en Linux"
@@ -359,6 +488,8 @@ install_cloud_agent_tools() {
     "$engram_sha"
 
   echo "==> Binarios Cloud: $(command -v gentle-ai) $(command -v engram)"
+  install_pinned_pi
+  echo "==> Binarios Cloud: $(command -v gentle-ai) $(command -v engram) $(command -v pi)"
   install_repo_npm_tooling
 }
 

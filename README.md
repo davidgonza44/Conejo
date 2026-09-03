@@ -87,6 +87,7 @@ npm ci
 | Archify 2.17 | Diagrama de arquitectura basado en evidencia del repositorio. Se usa el skill ya instalado; no hay dependencia nueva. | Ver comandos siguientes | JSON y HTML bajo `docs/architecture/` |
 | Gentle AI 2.5.0 | Binario fijado en el Cursor Cloud Build. No se instala el preset ni se usa como fuente de reglas. | `gentle-ai doctor` | Ninguna en esta fase |
 | Engram 1.20.0 | Binario local fijado en el Cursor Cloud Build. MCP perfil `agent`; sin Engram Cloud/sync. | `engram version` | `~/.engram` fuera del repo |
+| Pi 0.84.4 | Binario fijado (`@earendil-works/pi-coding-agent`). Fase 1: solo infraestructura read-only; sin clave ni llamada LLM. | `.cursor/pi-review.sh --check` | `/.pi/` ignorado; `~/.pi` fuera del repo |
 | Ponytail | Plugin ya disponible para contener sobreingeniería y aplicar KISS/YAGNI. | Se activa desde el asistente | Sin scaffolding |
 | RTK | Pendiente de identificar el producto exacto. No se asume Redux Toolkit. | No aplica | Ninguna |
 
@@ -141,14 +142,25 @@ node "$archify\bin\archify.mjs" visual-check `
 y elimínelos después; solo el JSON fuente y el HTML final pertenecen al
 repositorio.
 
-### Cursor Cloud: Gentle AI y Engram
+### Cursor Cloud: Gentle AI, Engram y Pi
 
 El Cloud Build instala binarios exactos en `/usr/local/bin`:
 
 - Gentle AI `v2.5.0` (release oficial `Gentleman-Programming/gentle-ai`)
 - Engram `v1.20.0` (canal estable `v*`, no `pi-v*` ni prereleases `v2.0.0-rc.*`)
+- Pi `0.84.4` (paquete npm `@earendil-works/pi-coding-agent@0.84.4`, `--ignore-scripts`)
 
 Engram queda en modo local. No se configuran `ENGRAM_CLOUD_*`, autosync ni memoria precargada en el snapshot. El MCP de Cloud Agents debe registrarse en Cursor Cloud (no en el repositorio) como stdio: `engram mcp --tools=agent`. No ejecutar `engram setup cursor` ni versionar `~/.cursor/mcp.json`.
+
+Pi en Fase 1 es solo infraestructura de instalación y un wrapper read-only. La verificación no requiere autenticación ni realiza llamadas LLM. La autenticación y cualquier revisión con modelo se evaluarán aparte. Pi no está integrado con Gentle AI: no se instalan `gentle-pi` ni companions, no se configura MCP/subagents y no se ejecuta `gentle-ai install --agent pi`. El único punto de entrada aprobado es `.cursor/pi-review.sh`; en esta fase use `--check`.
+
+Rollback de Pi (no se ejecuta automáticamente):
+
+```powershell
+sudo npm uninstall -g @earendil-works/pi-coding-agent
+```
+
+Si el Build creó un enlace controlado en `/usr/local/cargo/bin/pi`, quítelo. Elimine `~/.pi` solo si existe y es seguro borrarlo. Revierta los cambios de Fase 1 del repositorio y reconstruya el entorno Cloud.
 
 ### Gentle AI, Ponytail y RTK
 
