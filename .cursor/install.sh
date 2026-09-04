@@ -31,6 +31,9 @@ ENGRAM_VERSION="v1.20.0"
 NODE_VERSION="v22.23.2"
 PI_PACKAGE="@earendil-works/pi-coding-agent"
 PI_VERSION="0.84.4"
+NODE_NPM_VERSION="10.9.8"
+NPM_CLI_RELPATH="lib/node_modules/npm/bin/npm-cli.js"
+PI_CLI_RELPATH="lib/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js"
 # SHA-512 SRI of the published registry tarball bytes for PI_PACKAGE@PI_VERSION.
 # Bind installation: npm pack -> hash the actual .tgz -> compare -> install that file.
 PI_NPM_INTEGRITY="sha512-jmOlrqUmvhh/siNWFRXjYLJzhKFIHNsAQaysRwzQPQFnPAaV/vhqHsLH/MBsIISA1Rjj7WTUFR3nJrpXoLx39w=="
@@ -195,34 +198,106 @@ cloud_tools_install_release_binary() {
   echo "==> ${name} ${tag} instalado en ${dest}"
 }
 
-# Prefix reuse gate for the official Node layout. npm is validated by the
-# pinned Node executing the bundled npm-cli.js, not by PATH or #!/usr/bin/env.
+cloud_tools_canonical() {
+  local path="$1"
+  local out
+  if [ ! -x /usr/bin/readlink ]; then
+    return 1
+  fi
+  out="$(/usr/bin/readlink -f "$path")" || return 1
+  [ -n "$out" ] || return 1
+  printf '%s' "${out%/}"
+}
+
+# The input prefix path is the trust root. Canonicalization must not move it.
+cloud_tools_literal_prefix_holds() {
+  local prefix="$1"
+  local literal canonical
+  literal="${prefix%/}"
+  [ -n "$literal" ] && [ -d "$prefix" ] || return 1
+  canonical="$(cloud_tools_canonical "$prefix")" || return 1
+  [ "$canonical" = "$literal" ]
+}
+
+# Same metadata the verified archive install publishes. Isolated fixtures are
+# user-owned; production reuse must call this in addition to prefix_ready.
+cloud_tools_pinned_nodejs_prefix_hardened() {
+  local prefix="$1"
+  [ -d "$prefix" ] || return 1
+  if [ -n "$(find "$prefix" \( ! -user root -o ! -group root \) -print)" ]; then
+    return 1
+  fi
+  if [ -n "$(find "$prefix" ! -type l -perm /022 -print)" ]; then
+    return 1
+  fi
+  return 0
+}
+
+# Prefix reuse gate. Authenticate paths before executing Node or npm-cli.js.
+# Does not consult PATH. Does not execute prefix/bin/npm (env-node shebang).
 cloud_tools_pinned_nodejs_prefix_ready() {
   local prefix="$1"
   local prefix_node="${prefix}/bin/node"
   local prefix_npm="${prefix}/bin/npm"
-  local npm_cli="${prefix}/lib/node_modules/npm/bin/npm-cli.js"
-  local node_ver npm_ver canonical_prefix canonical_npm canonical_cli
+  local npm_cli="${prefix}/${NPM_CLI_RELPATH}"
+  local literal node_ver npm_ver canonical_node expected_node canonical_npm canonical_cli
+  cloud_tools_literal_prefix_holds "$prefix" || return 1
+  literal="${prefix%/}"
   [ -x "$prefix_node" ] || return 1
   [ -x "$prefix_npm" ] || return 1
   [ -f "$npm_cli" ] || return 1
-  node_ver="$("$prefix_node" --version 2>/dev/null || true)"
-  [ "$node_ver" = "$NODE_VERSION" ] || return 1
-  if [ ! -x /usr/bin/readlink ]; then
+  canonical_node="$(cloud_tools_canonical "$prefix_node")" || return 1
+  expected_node="${literal}/bin/node"
+  [ "$canonical_node" = "$expected_node" ] || return 1
+  case "$canonical_node" in
+    /exec-daemon/*) return 1 ;;
+  esac
+  canonical_cli="$(cloud_tools_canonical "$npm_cli")" || return 1
+  [ "$canonical_cli" = "${literal}/${NPM_CLI_RELPATH}" ] || return 1
+  canonical_npm="$(cloud_tools_canonical "$prefix_npm")" || return 1
+  [ "$canonical_npm" = "$canonical_cli" ] || return 1
+  if ! node_ver="$("$prefix_node" --version 2>/dev/null)"; then
     return 1
   fi
-  canonical_prefix="$(/usr/bin/readlink -f "$prefix")" || canonical_prefix=""
-  canonical_npm="$(/usr/bin/readlink -f "$prefix_npm")" || canonical_npm=""
-  canonical_cli="$(/usr/bin/readlink -f "$npm_cli")" || canonical_cli=""
-  [ -n "$canonical_prefix" ] && [ -n "$canonical_npm" ] && [ -n "$canonical_cli" ] || return 1
-  canonical_prefix="${canonical_prefix%/}"
-  canonical_npm="${canonical_npm%/}"
-  canonical_cli="${canonical_cli%/}"
-  [ "$canonical_npm" = "$canonical_cli" ] || return 1
-  cloud_tools_path_is_beneath "$canonical_npm" "$canonical_prefix" || return 1
-  npm_ver="$("$prefix_node" "$npm_cli" --version 2>/dev/null || true)"
-  [ "$npm_ver" = "10.9.8" ] || return 1
+  [ "$node_ver" = "$NODE_VERSION" ] || return 1
+  if ! npm_ver="$("$prefix_node" "$npm_cli" --version 2>/dev/null)"; then
+    return 1
+  fi
+  [ "$npm_ver" = "$NODE_NPM_VERSION" ] || return 1
   return 0
+}
+
+cloud_tools_assert_pinned_pi_cli() {
+  local prefix="$1"
+  local prefix_pi="${prefix}/bin/pi"
+  local pi_cli="${prefix}/${PI_CLI_RELPATH}"
+  local literal canonical_pi canonical_cli
+  if ! cloud_tools_literal_prefix_holds "$prefix"; then
+    cloud_tools_fail "el prefijo Node fijado no es el directorio literal (${prefix})"
+  fi
+  literal="${prefix%/}"
+  if [ ! -e "$prefix_pi" ]; then
+    cloud_tools_fail "falta pi en el prefijo Node fijado (${prefix_pi})"
+  fi
+  if [ ! -f "$pi_cli" ]; then
+    cloud_tools_fail "falta el CLI fijado de Pi (${pi_cli})"
+  fi
+  canonical_cli="$(cloud_tools_canonical "$pi_cli")" || canonical_cli=""
+  canonical_pi="$(cloud_tools_canonical "$prefix_pi")" || canonical_pi=""
+  if [ -z "$canonical_cli" ] || [ -z "$canonical_pi" ]; then
+    cloud_tools_fail "no se pudo resolver el CLI de Pi (${prefix_pi} / ${pi_cli})"
+  fi
+  if [ "$canonical_cli" != "${literal}/${PI_CLI_RELPATH}" ]; then
+    cloud_tools_fail "el CLI de Pi (${pi_cli} -> ${canonical_cli}) no es el path fijado"
+  fi
+  if [ "$canonical_pi" != "$canonical_cli" ]; then
+    cloud_tools_fail "pi (${prefix_pi} -> ${canonical_pi}) no es el CLI fijado (${canonical_cli})"
+  fi
+  case "$canonical_pi" in
+    /exec-daemon/*)
+      cloud_tools_fail "pi resuelve a ${canonical_pi}"
+      ;;
+  esac
 }
 
 install_pinned_nodejs() {
@@ -230,8 +305,10 @@ install_pinned_nodejs() {
 
   local dest_node="${CLOUD_TOOLS_BIN_DIR}/node"
   local dest_npm="${CLOUD_TOOLS_BIN_DIR}/npm"
+  local dest_resolved prefix_node_resolved
   local prefix="/usr/local/lib/nodejs/node-${NODE_VERSION}"
-  if cloud_tools_pinned_nodejs_prefix_ready "$prefix"; then
+  if cloud_tools_pinned_nodejs_prefix_ready "$prefix" \
+    && cloud_tools_pinned_nodejs_prefix_hardened "$prefix"; then
     echo "==> Node.js ${NODE_VERSION} ya está en el prefijo fijado (${prefix}); se reutiliza."
   else
     local arch node_arch expected_sha
@@ -314,8 +391,13 @@ install_pinned_nodejs() {
   if ! cloud_tools_pinned_nodejs_prefix_ready "$prefix"; then
     cloud_tools_fail "el prefijo Node fijado no quedó listo (${prefix})"
   fi
-  if ! cloud_tools_version_matches "$dest_node" "${NODE_VERSION#v}"; then
-    cloud_tools_fail "node quedó en ${dest_node} pero no reporta ${NODE_VERSION}"
+  if ! cloud_tools_pinned_nodejs_prefix_hardened "$prefix"; then
+    cloud_tools_fail "el prefijo Node fijado no conservó root:root sin escritura group/other (${prefix})"
+  fi
+  dest_resolved="$(cloud_tools_canonical "$dest_node")" || dest_resolved=""
+  prefix_node_resolved="$(cloud_tools_canonical "${prefix}/bin/node")" || prefix_node_resolved=""
+  if [ -z "$dest_resolved" ] || [ "$dest_resolved" != "$prefix_node_resolved" ]; then
+    cloud_tools_fail "el enlace ${dest_node} no apunta al Node del prefijo fijado"
   fi
   echo "==> Node.js ${NODE_VERSION} listo en ${dest_node} (prefijo ${prefix})"
 
@@ -447,32 +529,37 @@ cloud_tools_pi_mktemp_probe_home() {
 }
 
 cloud_tools_pi_npm_pack() {
-  local npm_bin="$1"
-  local package="$2"
-  local version="$3"
-  local pack_dir="$4"
+  local node_bin="$1"
+  local npm_cli="$2"
+  local package="$3"
+  local version="$4"
+  local pack_dir="$5"
   (
     cd -- "$pack_dir" || exit 1
-    npm_config_ignore_scripts=true "$npm_bin" pack "${package}@${version}" \
+    npm_config_ignore_scripts=true \
+      "$node_bin" "$npm_cli" pack "${package}@${version}" \
       --pack-destination "$pack_dir"
   ) || cloud_tools_fail "npm pack falló para ${package}@${version}"
 }
 
 cloud_tools_pi_reuse_if_ready() {
   local prefix="$1"
-  local prefix_pi="$2"
-  [ -x "$prefix_pi" ] || return 1
-  cloud_tools_assert_pi_under_prefix "$prefix_pi" "$prefix"
-  cloud_tools_pi_version_matches "$prefix_pi" "$PI_VERSION"
+  local prefix_node="${prefix}/bin/node"
+  local prefix_pi="${prefix}/bin/pi"
+  local pi_cli="${prefix}/${PI_CLI_RELPATH}"
+  [ -e "$prefix_pi" ] || return 1
+  cloud_tools_assert_pinned_pi_cli "$prefix"
+  cloud_tools_pi_version_matches "$prefix_node" "$pi_cli" "$PI_VERSION"
 }
 
-# Pi-only version probe. Never runs `pi version` (prompt-capable). Isolates HOME
-# in a subshell so a RETURN trap cannot clobber the caller's pack-dir cleanup.
+# Pi-only version probe through pinned Node + authenticated CLI.
+# Never runs `pi version` and never executes PATH pi or the Pi shebang.
 cloud_tools_pi_version_matches() {
-  local binary="$1"
-  local expected="$2"
+  local node_bin="$1"
+  local pi_cli="$2"
+  local expected="$3"
   local probe_home output reported
-  if [ ! -x "$binary" ]; then
+  if [ ! -x "$node_bin" ] || [ ! -f "$pi_cli" ]; then
     return 1
   fi
   probe_home=""
@@ -484,7 +571,7 @@ cloud_tools_pi_version_matches() {
   fi
   if ! output="$(
     trap 'rm -rf "$probe_home"' EXIT
-    HOME="$probe_home" "$binary" --version 2>/dev/null
+    HOME="$probe_home" "$node_bin" "$pi_cli" --version 2>/dev/null
   )"; then
     return 1
   fi
@@ -534,11 +621,12 @@ cloud_tools_assert_pinned_pi_on_path() {
 cloud_tools_assert_ready_pi() {
   local prefix="$1"
   local prefix_pi="$2"
-  local pi_path
+  local prefix_node="${prefix}/bin/node"
+  local pi_cli="${prefix}/${PI_CLI_RELPATH}"
+  cloud_tools_assert_pinned_pi_cli "$prefix"
   cloud_tools_assert_pinned_pi_on_path "$prefix" "$prefix_pi"
-  pi_path="$(command -v pi || true)"
-  if ! cloud_tools_pi_version_matches "$pi_path" "$PI_VERSION"; then
-    cloud_tools_fail "pi en PATH no reporta ${PI_VERSION} con --version"
+  if ! cloud_tools_pi_version_matches "$prefix_node" "$pi_cli" "$PI_VERSION"; then
+    cloud_tools_fail "el CLI fijado de Pi no reporta ${PI_VERSION} con --version"
   fi
 }
 
@@ -566,9 +654,10 @@ process.stdout.write("sha512-" + crypto.createHash("sha512").update(buf).digest(
 }
 
 cloud_tools_pi_install_verified_tarball() {
-  local npm_bin="$1"
-  local prefix="$2"
-  local tarball="$3"
+  local node_bin="$1"
+  local npm_cli="$2"
+  local prefix="$3"
+  local tarball="$4"
   if [ ! -f "$tarball" ]; then
     cloud_tools_fail "solo se instala el tarball verificado; no existe ${tarball}"
   fi
@@ -579,10 +668,10 @@ cloud_tools_pi_install_verified_tarball() {
       ;;
   esac
   if [ -w "$prefix" ]; then
-    "$npm_bin" install -g --prefix "$prefix" --ignore-scripts "$tarball"
+    "$node_bin" "$npm_cli" install -g --prefix "$prefix" --ignore-scripts "$tarball"
   else
     echo "==> El prefix npm global no es escribible; se usa sudo"
-    sudo "$npm_bin" install -g --prefix "$prefix" --ignore-scripts "$tarball"
+    sudo "$node_bin" "$npm_cli" install -g --prefix "$prefix" --ignore-scripts "$tarball"
   fi
 }
 
@@ -613,38 +702,16 @@ install_pinned_pi() {
       ;;
   esac
 
-  hash -r
-  local node_path npm_path node_ver npm_ver
-  node_path="$(command -v node || true)"
-  npm_path="$(command -v npm || true)"
-  node_ver="$(node --version 2>/dev/null || true)"
-  npm_ver="$(npm --version 2>/dev/null || true)"
-  if [ "$node_ver" != "$NODE_VERSION" ]; then
-    cloud_tools_fail "Pi requiere Node ${NODE_VERSION}; se encontró ${node_ver:-ninguno} (${node_path:-sin node})"
-  fi
-  if [ "$npm_ver" != "10.9.8" ]; then
-    cloud_tools_fail "Pi requiere npm 10.9.8 del Node fijado; se encontró ${npm_ver:-ninguno} (${npm_path:-sin npm})"
-  fi
-  if [ "$node_path" = "/exec-daemon/node" ] || [ "$npm_path" = "/exec-daemon/npm" ]; then
-    cloud_tools_fail "Pi no debe instalarse con /exec-daemon/node o /exec-daemon/npm"
-  fi
-  if [ -z "$npm_path" ]; then
-    cloud_tools_fail "npm no está en PATH para instalar Pi"
-  fi
-
   local prefix="/usr/local/lib/nodejs/node-${NODE_VERSION}"
-  local npm_bin="${prefix}/bin/npm"
   local prefix_node="${prefix}/bin/node"
+  local npm_cli="${prefix}/${NPM_CLI_RELPATH}"
   local prefix_pi="${prefix}/bin/pi"
   local dest="${CLOUD_TOOLS_BIN_DIR}/pi"
-  if [ ! -x "$npm_bin" ]; then
-    cloud_tools_fail "No se encontró el npm fijado en ${npm_bin}"
-  fi
-  if [ ! -x "$prefix_node" ]; then
-    cloud_tools_fail "No se encontró el node fijado en ${prefix_node}"
+  if ! cloud_tools_pinned_nodejs_prefix_ready "$prefix"; then
+    cloud_tools_fail "Pi requiere el prefijo Node fijado listo (${prefix})"
   fi
 
-  if cloud_tools_pi_reuse_if_ready "$prefix" "$prefix_pi"; then
+  if cloud_tools_pi_reuse_if_ready "$prefix"; then
     cloud_tools_publish_pinned_pi "$prefix" "$prefix_pi" "$dest"
     echo "==> Pi ${PI_VERSION} ya está instalado; se reutiliza ($(command -v pi))."
     return 0
@@ -657,7 +724,7 @@ install_pinned_pi() {
   # shellcheck disable=SC2064
   trap "rm -rf '$pack_dir'" RETURN EXIT
 
-  cloud_tools_pi_npm_pack "$npm_bin" "$PI_PACKAGE" "$PI_VERSION" "$pack_dir"
+  cloud_tools_pi_npm_pack "$prefix_node" "$npm_cli" "$PI_PACKAGE" "$PI_VERSION" "$pack_dir"
 
   tgz=""
   for candidate in "$pack_dir"/*.tgz; do
@@ -679,14 +746,14 @@ install_pinned_pi() {
   fi
   echo "==> SRI del tarball verificado: ${sri}"
 
-  cloud_tools_pi_install_verified_tarball "$npm_bin" "$prefix" "$tgz"
+  cloud_tools_pi_install_verified_tarball "$prefix_node" "$npm_cli" "$prefix" "$tgz"
   cloud_tools_publish_pinned_pi "$prefix" "$prefix_pi" "$dest"
 
-  local verify_node verify_npm
-  verify_node="$(node --version 2>/dev/null || true)"
-  verify_npm="$(npm --version 2>/dev/null || true)"
-  if [ "$verify_node" != "$NODE_VERSION" ] || [ "$verify_npm" != "10.9.8" ]; then
-    cloud_tools_fail "Tras instalar Pi, Node/npm ya no coinciden (${verify_node:-?} / ${verify_npm:-?})"
+  if ! cloud_tools_pinned_nodejs_prefix_ready "$prefix"; then
+    cloud_tools_fail "Tras instalar Pi, el prefijo Node fijado ya no está listo"
+  fi
+  if ! cloud_tools_pi_version_matches "$prefix_node" "${prefix}/${PI_CLI_RELPATH}" "$PI_VERSION"; then
+    cloud_tools_fail "Tras instalar Pi, el CLI fijado no reporta ${PI_VERSION}"
   fi
 
   echo "==> Pi ${PI_PACKAGE}@${PI_VERSION} instalado desde tarball verificado en $(command -v pi)"
@@ -694,22 +761,14 @@ install_pinned_pi() {
 
 install_repo_npm_tooling() {
   echo "==> Instalando dependencias npm del repositorio (CodeGraph, Repomix, OpenSpec)"
-  hash -r
-  local node_path npm_path node_ver
-  node_path="$(command -v node || true)"
-  npm_path="$(command -v npm || true)"
-  node_ver="$(node --version 2>/dev/null || true)"
-  if [ "$node_ver" != "$NODE_VERSION" ]; then
-    cloud_tools_fail "npm ci requiere Node ${NODE_VERSION}; se encontró ${node_ver:-ninguno} (${node_path:-sin node})"
+  local prefix="/usr/local/lib/nodejs/node-${NODE_VERSION}"
+  local prefix_node="${prefix}/bin/node"
+  local npm_cli="${prefix}/${NPM_CLI_RELPATH}"
+  if ! cloud_tools_pinned_nodejs_prefix_ready "$prefix"; then
+    cloud_tools_fail "npm ci requiere el prefijo Node fijado listo (${prefix})"
   fi
-  if [ "$node_path" = "/exec-daemon/node" ] || [ "$npm_path" = "/exec-daemon/npm" ]; then
-    cloud_tools_fail "npm ci no debe usar /exec-daemon/node"
-  fi
-  if [ -z "$npm_path" ]; then
-    cloud_tools_fail "npm no está en PATH para npm ci"
-  fi
-  npm ci
-  echo "==> npm ci completado con ${node_path} ${node_ver}"
+  "$prefix_node" "$npm_cli" ci
+  echo "==> npm ci completado con ${prefix_node} ${NODE_VERSION}"
 }
 
 install_cloud_agent_tools() {

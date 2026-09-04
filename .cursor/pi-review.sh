@@ -15,7 +15,9 @@ PI_REVIEW_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # Hardcoded trust root. Must stay equal to install.sh NODE_VERSION.
 # Do not override from the environment.
 PI_PINNED_NODE_PREFIX="/usr/local/lib/nodejs/node-v22.23.2"
+PI_PINNED_NODE="${PI_PINNED_NODE_PREFIX}/bin/node"
 PI_PINNED_BIN="${PI_PINNED_NODE_PREFIX}/bin/pi"
+PI_PINNED_CLI="${PI_PINNED_NODE_PREFIX}/lib/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js"
 
 pi_review_fail() {
   echo "!! $*" >&2
@@ -34,11 +36,10 @@ pi_review_path_is_beneath() {
   esac
 }
 
-# Trust PATH pi only when it canonicalizes to the pinned prefix entry.
-# Must run before any Pi execution, including --version.
-pi_review_assert_pinned_pi() {
+# Authenticate the immutable trust chain before any Node/Pi execution.
+pi_review_assert_trust_chain() {
   local pi_path="$1"
-  local resolved expected canonical_prefix
+  local literal_prefix canonical_prefix canonical_node canonical_cli canonical_bin resolved
   if [ -z "$pi_path" ]; then
     pi_review_fail "pi no está en PATH"
   fi
@@ -48,34 +49,59 @@ pi_review_assert_pinned_pi() {
   if [ ! -x "$pi_path" ]; then
     pi_review_fail "pi en ${pi_path} no es ejecutable"
   fi
-  if [ ! -d "$PI_PINNED_NODE_PREFIX" ]; then
-    pi_review_fail "falta el prefijo Node fijado (${PI_PINNED_NODE_PREFIX})"
-  fi
-  if [ ! -x "$PI_PINNED_BIN" ]; then
-    pi_review_fail "falta pi en el prefijo Node fijado (${PI_PINNED_BIN})"
-  fi
   if [ ! -x /usr/bin/readlink ]; then
     pi_review_fail "readlink no está disponible para resolver pi"
   fi
-  resolved="$(/usr/bin/readlink -f "$pi_path")" || resolved=""
-  expected="$(/usr/bin/readlink -f "$PI_PINNED_BIN")" || expected=""
-  canonical_prefix="$(/usr/bin/readlink -f "$PI_PINNED_NODE_PREFIX")" || canonical_prefix=""
-  if [ -z "$resolved" ] || [ -z "$expected" ] || [ -z "$canonical_prefix" ]; then
-    pi_review_fail "no se pudo resolver el destino de pi (${pi_path} / ${PI_PINNED_BIN})"
+  literal_prefix="${PI_PINNED_NODE_PREFIX%/}"
+  if [ ! -d "$PI_PINNED_NODE_PREFIX" ]; then
+    pi_review_fail "falta el prefijo Node fijado (${PI_PINNED_NODE_PREFIX})"
   fi
-  resolved="${resolved%/}"
-  expected="${expected%/}"
+  canonical_prefix="$(/usr/bin/readlink -f "$PI_PINNED_NODE_PREFIX")" || canonical_prefix=""
   canonical_prefix="${canonical_prefix%/}"
+  if [ -z "$canonical_prefix" ] || [ "$canonical_prefix" != "$literal_prefix" ]; then
+    pi_review_fail "el prefijo Node fijado no es el directorio literal (${PI_PINNED_NODE_PREFIX} -> ${canonical_prefix:-?})"
+  fi
+  if [ ! -x "$PI_PINNED_NODE" ]; then
+    pi_review_fail "falta Node en el prefijo fijado (${PI_PINNED_NODE})"
+  fi
+  canonical_node="$(/usr/bin/readlink -f "$PI_PINNED_NODE")" || canonical_node=""
+  canonical_node="${canonical_node%/}"
+  if [ "$canonical_node" != "${literal_prefix}/bin/node" ]; then
+    pi_review_fail "Node (${PI_PINNED_NODE} -> ${canonical_node:-?}) no es el ejecutable fijado"
+  fi
+  case "$canonical_node" in
+    /exec-daemon/*)
+      pi_review_fail "Node resuelve a ${canonical_node}"
+      ;;
+  esac
+  if [ ! -f "$PI_PINNED_CLI" ]; then
+    pi_review_fail "falta el CLI fijado de Pi (${PI_PINNED_CLI})"
+  fi
+  canonical_cli="$(/usr/bin/readlink -f "$PI_PINNED_CLI")" || canonical_cli=""
+  canonical_cli="${canonical_cli%/}"
+  if [ "$canonical_cli" != "$PI_PINNED_CLI" ]; then
+    pi_review_fail "el CLI de Pi (${PI_PINNED_CLI} -> ${canonical_cli:-?}) no es el path fijado"
+  fi
+  if [ ! -e "$PI_PINNED_BIN" ]; then
+    pi_review_fail "falta pi en el prefijo Node fijado (${PI_PINNED_BIN})"
+  fi
+  canonical_bin="$(/usr/bin/readlink -f "$PI_PINNED_BIN")" || canonical_bin=""
+  canonical_bin="${canonical_bin%/}"
+  if [ "$canonical_bin" != "$canonical_cli" ]; then
+    pi_review_fail "pi (${PI_PINNED_BIN} -> ${canonical_bin:-?}) no es el CLI fijado (${canonical_cli})"
+  fi
+  resolved="$(/usr/bin/readlink -f "$pi_path")" || resolved=""
+  resolved="${resolved%/}"
   case "$resolved" in
     /exec-daemon/*)
       pi_review_fail "pi resuelve a ${resolved}"
       ;;
   esac
-  if [ "$resolved" != "$expected" ]; then
-    pi_review_fail "pi en PATH (${pi_path} -> ${resolved}) no es el binario del prefijo fijado (${expected})"
+  if [ "$resolved" != "$canonical_cli" ]; then
+    pi_review_fail "pi en PATH (${pi_path} -> ${resolved}) no es el CLI fijado (${canonical_cli})"
   fi
-  if ! pi_review_path_is_beneath "$resolved" "$canonical_prefix"; then
-    pi_review_fail "pi (${pi_path} -> ${resolved}) no está bajo el prefijo fijado (${canonical_prefix})"
+  if ! pi_review_path_is_beneath "$resolved" "$literal_prefix"; then
+    pi_review_fail "pi (${pi_path} -> ${resolved}) no está bajo el prefijo fijado (${literal_prefix})"
   fi
 }
 
@@ -142,7 +168,7 @@ fi
 
 hash -r
 pi_path="$(command -v pi || true)"
-pi_review_assert_pinned_pi "$pi_path"
+pi_review_assert_trust_chain "$pi_path"
 
 # Aislar HOME: `pi --version` escribiría ~/.pi/agent/auth.json en el home real.
 check_home=""
@@ -154,7 +180,7 @@ if [ -z "$check_home" ]; then
 fi
 # shellcheck disable=SC2064
 trap 'rm -rf "$check_home"' EXIT
-if ! pi_output="$(HOME="$check_home" "$pi_path" --version 2>&1)"; then
+if ! pi_output="$(HOME="$check_home" "$PI_PINNED_NODE" "$PI_PINNED_CLI" --version 2>&1)"; then
   pi_review_fail "pi --version falló (${pi_output})"
 fi
 pi_reported="$(pi_review_version_token "$pi_output")" || pi_review_fail "pi --version no reportó una versión (${pi_output})"

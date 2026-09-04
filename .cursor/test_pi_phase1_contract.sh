@@ -39,25 +39,41 @@ pinned_node() {
 
 # --- Finding 1: flag-only version probe + isolated HOME ---
 
-finding1_only_version_flag() {
-  local tmpdir bin log
-  tmpdir="$(mktemp -d)"
-  bin="${tmpdir}/pi"
-  log="${tmpdir}/argv.log"
-  cat > "$bin" <<EOF
+write_mock_node_cli() {
+  local node_bin="$1"
+  local cli="$2"
+  local log="$3"
+  local printed="${4-0.84.4}"
+  local rc="${5-0}"
+  mkdir -p "$(dirname "$cli")"
+  printf 'fake-pi-cli\n' > "$cli"
+  cat > "$node_bin" <<EOF
 #!/bin/sh
 printf '%s\n' "\$*" >> "$log"
-printf '%s\n' "0.84.4"
+if [ "\$2" = "--version" ]; then
+  printf '%s\n' "${printed}"
+  exit ${rc}
+fi
+exit 1
 EOF
-  chmod +x "$bin"
-  if cloud_tools_pi_version_matches "$bin" "0.84.4"; then
-    if [ "$(cat "$log")" = "--version" ]; then
-      record "Pi probe invokes only --version" "PASS" "PASS"
+  chmod +x "$node_bin"
+}
+
+finding1_only_version_flag() {
+  local tmpdir node_bin cli log
+  tmpdir="$(mktemp -d)"
+  node_bin="${tmpdir}/node"
+  cli="${tmpdir}/cli.js"
+  log="${tmpdir}/argv.log"
+  write_mock_node_cli "$node_bin" "$cli" "$log"
+  if cloud_tools_pi_version_matches "$node_bin" "$cli" "0.84.4"; then
+    if [ "$(cat "$log")" = "${cli} --version" ]; then
+      record "Pi probe invokes pinned Node + CLI --version" "PASS" "PASS"
     else
-      record "Pi probe invokes only --version" "argv=$(tr '\n' ' ' < "$log")" "--version"
+      record "Pi probe invokes pinned Node + CLI --version" "argv=$(tr '\n' ' ' < "$log")" "${cli} --version"
     fi
   else
-    record "Pi probe invokes only --version" "NO MATCH" "PASS"
+    record "Pi probe invokes pinned Node + CLI --version" "NO MATCH" "PASS"
   fi
   rm -rf "$tmpdir"
 }
@@ -83,20 +99,22 @@ EOF
 }
 
 finding1_home_isolation() {
-  local tmpdir bin homelog marker
+  local tmpdir node_bin cli homelog marker
   tmpdir="$(mktemp -d)"
-  bin="${tmpdir}/pi"
+  node_bin="${tmpdir}/node"
+  cli="${tmpdir}/cli.js"
   homelog="${tmpdir}/home.log"
   marker="pi-phase1-probe-marker-$$"
   rm -f "${REAL_HOME}/${marker}"
-  cat > "$bin" <<EOF
+  printf 'fake-pi-cli\n' > "$cli"
+  cat > "$node_bin" <<EOF
 #!/bin/sh
 printf '%s\n' "\$HOME" > "$homelog"
 printf 'x\n' > "\$HOME/${marker}"
 printf '%s\n' "0.84.4"
 EOF
-  chmod +x "$bin"
-  cloud_tools_pi_version_matches "$bin" "0.84.4" >/dev/null || true
+  chmod +x "$node_bin"
+  cloud_tools_pi_version_matches "$node_bin" "$cli" "0.84.4" >/dev/null || true
   if [ -e "${REAL_HOME}/${marker}" ]; then
     record "Pi probe isolates HOME" "wrote real HOME" "isolated"
   elif [ ! -s "$homelog" ]; then
@@ -111,24 +129,25 @@ EOF
 }
 
 finding1_token_cases() {
-  local tmpdir bin
+  local tmpdir node_bin cli log
   tmpdir="$(mktemp -d)"
-  bin="${tmpdir}/pi"
-  printf '#!/bin/sh\nprintf "%%s\\n" "0.84.4"\n' > "$bin"
-  chmod +x "$bin"
-  if cloud_tools_pi_version_matches "$bin" "0.84.4"; then
+  node_bin="${tmpdir}/node"
+  cli="${tmpdir}/cli.js"
+  log="${tmpdir}/argv.log"
+  write_mock_node_cli "$node_bin" "$cli" "$log" "0.84.4"
+  if cloud_tools_pi_version_matches "$node_bin" "$cli" "0.84.4"; then
     record "Pi --version 0.84.4 matches" "PASS" "PASS"
   else
     record "Pi --version 0.84.4 matches" "NO MATCH" "PASS"
   fi
-  printf '#!/bin/sh\nprintf "%%s\\n" "0.84.40"\n' > "$bin"
-  if cloud_tools_pi_version_matches "$bin" "0.84.4"; then
+  write_mock_node_cli "$node_bin" "$cli" "$log" "0.84.40"
+  if cloud_tools_pi_version_matches "$node_bin" "$cli" "0.84.4"; then
     record "Pi --version 0.84.40 rejected" "MATCH" "NO MATCH"
   else
     record "Pi --version 0.84.40 rejected" "PASS" "PASS"
   fi
-  printf '#!/bin/sh\nprintf "%%s\\n" "0.84.4-rc.1"\n' > "$bin"
-  if cloud_tools_pi_version_matches "$bin" "0.84.4"; then
+  write_mock_node_cli "$node_bin" "$cli" "$log" "0.84.4-rc.1"
+  if cloud_tools_pi_version_matches "$node_bin" "$cli" "0.84.4"; then
     record "Pi --version 0.84.4-rc.1 rejected" "MATCH" "NO MATCH"
   else
     record "Pi --version 0.84.4-rc.1 rejected" "PASS" "PASS"
@@ -390,21 +409,23 @@ finding4_sri_mismatch() {
 }
 
 finding4_install_rejects_registry_specs() {
-  local tmpdir npm_bin prefix log
+  local tmpdir node_bin npm_cli prefix log
   tmpdir="$(mktemp -d)"
-  npm_bin="${tmpdir}/npm"
+  node_bin="${tmpdir}/node"
+  npm_cli="${tmpdir}/npm-cli.js"
   prefix="${tmpdir}/prefix"
   log="${tmpdir}/npm.log"
   mkdir -p "$prefix"
-  cat > "$npm_bin" <<EOF
+  printf 'fake-cli\n' > "$npm_cli"
+  cat > "$node_bin" <<EOF
 #!/bin/sh
 printf '%s\n' "\$*" >> "$log"
 exit 0
 EOF
-  chmod +x "$npm_bin"
+  chmod +x "$node_bin"
 
   : > "$log"
-  if (cloud_tools_pi_install_verified_tarball "$npm_bin" "$prefix" "@earendil-works/pi-coding-agent@0.84.4"); then
+  if (cloud_tools_pi_install_verified_tarball "$node_bin" "$npm_cli" "$prefix" "@earendil-works/pi-coding-agent@0.84.4"); then
     record "install rejects package-name spec" "PASS" "FAIL"
   elif [ -s "$log" ]; then
     record "install rejects package-name spec" "npm ran: $(cat "$log")" "no npm"
@@ -413,7 +434,7 @@ EOF
   fi
 
   : > "$log"
-  if (cloud_tools_pi_install_verified_tarball "$npm_bin" "$prefix" "latest"); then
+  if (cloud_tools_pi_install_verified_tarball "$node_bin" "$npm_cli" "$prefix" "latest"); then
     record "install rejects latest" "PASS" "FAIL"
   elif [ -s "$log" ]; then
     record "install rejects latest" "npm ran: $(cat "$log")" "no npm"
@@ -422,7 +443,7 @@ EOF
   fi
 
   : > "$log"
-  if (cloud_tools_pi_install_verified_tarball "$npm_bin" "$prefix" "${tmpdir}/missing.tgz"); then
+  if (cloud_tools_pi_install_verified_tarball "$node_bin" "$npm_cli" "$prefix" "${tmpdir}/missing.tgz"); then
     record "install rejects missing tarball" "PASS" "FAIL"
   elif [ -s "$log" ]; then
     record "install rejects missing tarball" "npm ran: $(cat "$log")" "no npm"
@@ -597,7 +618,7 @@ list_repo_tgz() {
   find "$ROOT" -name '*.tgz' -print | sort
 }
 
-write_mock_npm_pack() {
+write_mock_node_npm_pack() {
   local dest="$1"
   local log="$2"
   cat > "$dest" <<EOF
@@ -613,8 +634,6 @@ for arg in "\$@"; do
   prev="\$arg"
 done
 printf 'dest=%s\n' "\$dest" >> "$log"
-# Write the fake tarball only to the received --pack-destination.
-# Never write to cwd, \$TMPDIR, or a guessed path.
 if [ -z "\$dest" ] || [ ! -d "\$dest" ]; then
   exit 1
 fi
@@ -627,20 +646,22 @@ EOF
 assert_pack_contract() {
   local label="$1"
   local hostile_tmpdir="$2"
-  local tmpdir mock_npm log pack_dir before after tgz argv ignore dest expected_argv stray
+  local tmpdir mock_node npm_cli log pack_dir before after tgz argv ignore dest expected_argv stray
   tmpdir="$(mktemp -d)"
-  mock_npm="${tmpdir}/npm"
+  mock_node="${tmpdir}/node"
+  npm_cli="${tmpdir}/npm-cli.js"
   log="${tmpdir}/npm.log"
-  write_mock_npm_pack "$mock_npm" "$log"
+  printf 'fake-npm-cli\n' > "$npm_cli"
+  write_mock_node_npm_pack "$mock_node" "$log"
   before="$(list_repo_tgz)"
   pack_dir="$(TMPDIR="$hostile_tmpdir" cloud_tools_pi_mktemp_pack_dir)"
-  cloud_tools_pi_npm_pack "$mock_npm" "$PI_PACKAGE" "$PI_VERSION" "$pack_dir"
+  cloud_tools_pi_npm_pack "$mock_node" "$npm_cli" "$PI_PACKAGE" "$PI_VERSION" "$pack_dir"
   after="$(list_repo_tgz)"
   tgz="${pack_dir}/earendil-works-pi-coding-agent-0.84.4.tgz"
   argv="$(sed -n 's/^argv=//p' "$log")"
   ignore="$(sed -n 's/^ignore=//p' "$log")"
   dest="$(sed -n 's/^dest=//p' "$log")"
-  expected_argv="pack ${PI_PACKAGE}@${PI_VERSION} --pack-destination ${pack_dir}"
+  expected_argv="${npm_cli} pack ${PI_PACKAGE}@${PI_VERSION} --pack-destination ${pack_dir}"
   stray="$(find "$tmpdir" -name '*.tgz' -print | sort || true)"
   if cloud_tools_repo_contains_path "$pack_dir"; then
     record "$label" "pack_dir in repo" "outside"
@@ -691,33 +712,36 @@ finding6_containment_guard() {
 }
 
 finding4_install_accepts_local_tgz() {
-  local tmpdir npm_bin prefix log tgz
+  local tmpdir node_bin npm_cli prefix log tgz
   tmpdir="$(mktemp -d)"
-  npm_bin="${tmpdir}/npm"
+  node_bin="${tmpdir}/node"
+  npm_cli="${tmpdir}/npm-cli.js"
   prefix="${tmpdir}/prefix"
   log="${tmpdir}/npm.log"
   tgz="${tmpdir}/earendil-works-pi-coding-agent-0.84.4.tgz"
   mkdir -p "$prefix"
   printf 'dummy-tarball\n' > "$tgz"
-  cat > "$npm_bin" <<EOF
+  printf 'fake-cli\n' > "$npm_cli"
+  cat > "$node_bin" <<EOF
 #!/bin/sh
 printf '%s\n' "\$*" >> "$log"
 exit 0
 EOF
-  chmod +x "$npm_bin"
+  chmod +x "$node_bin"
 
-  if ! cloud_tools_pi_install_verified_tarball "$npm_bin" "$prefix" "$tgz"; then
-    record "install accepts verified local .tgz with --ignore-scripts" "FAIL" "PASS"
+  if ! cloud_tools_pi_install_verified_tarball "$node_bin" "$npm_cli" "$prefix" "$tgz"; then
+    record "install accepts verified local .tgz via pinned Node + npm CLI" "FAIL" "PASS"
     rm -rf "$tmpdir"
     return 0
   fi
-  if grep -F -- "$tgz" "$log" >/dev/null \
+  if grep -F -- "$npm_cli" "$log" >/dev/null \
+    && grep -F -- "$tgz" "$log" >/dev/null \
     && grep -F -- "--ignore-scripts" "$log" >/dev/null \
     && ! grep -F -- "@earendil-works/pi-coding-agent@0.84.4" "$log" >/dev/null \
     && ! grep -F -- "latest" "$log" >/dev/null; then
-    record "install accepts verified local .tgz with --ignore-scripts" "PASS" "PASS"
+    record "install accepts verified local .tgz via pinned Node + npm CLI" "PASS" "PASS"
   else
-    record "install accepts verified local .tgz with --ignore-scripts" "argv=$(cat "$log")" "tgz+ignore-scripts"
+    record "install accepts verified local .tgz via pinned Node + npm CLI" "argv=$(cat "$log")" "node+cli+tgz"
   fi
   rm -rf "$tmpdir"
 }
@@ -734,36 +758,37 @@ finding2_controlled_symlink_chain
 finding2_dest_only_without_prefix
 finding3_invalid_wrapper_calls
 finding7_version_exit_status() {
-  local tmpdir bin
+  local tmpdir node_bin cli log
   tmpdir="$(mktemp -d)"
-  bin="${tmpdir}/pi"
-  printf '#!/bin/sh\nprintf "0.84.4\\n"\nexit 0\n' > "$bin"
-  chmod +x "$bin"
-  if cloud_tools_pi_version_matches "$bin" "0.84.4"; then
+  node_bin="${tmpdir}/node"
+  cli="${tmpdir}/cli.js"
+  log="${tmpdir}/argv.log"
+  write_mock_node_cli "$node_bin" "$cli" "$log" "0.84.4" "0"
+  if cloud_tools_pi_version_matches "$node_bin" "$cli" "0.84.4"; then
     record "helper 0.84.4 exit 0 matches" "PASS" "PASS"
   else
     record "helper 0.84.4 exit 0 matches" "NO MATCH" "PASS"
   fi
-  printf '#!/bin/sh\nprintf "0.84.4\\n"\nexit 42\n' > "$bin"
-  if cloud_tools_pi_version_matches "$bin" "0.84.4"; then
+  write_mock_node_cli "$node_bin" "$cli" "$log" "0.84.4" "42"
+  if cloud_tools_pi_version_matches "$node_bin" "$cli" "0.84.4"; then
     record "helper 0.84.4 exit 42 rejected" "MATCH" "NO MATCH"
   else
     record "helper 0.84.4 exit 42 rejected" "PASS" "PASS"
   fi
-  printf '#!/bin/sh\nprintf "0.84.40\\n"\nexit 0\n' > "$bin"
-  if cloud_tools_pi_version_matches "$bin" "0.84.4"; then
+  write_mock_node_cli "$node_bin" "$cli" "$log" "0.84.40" "0"
+  if cloud_tools_pi_version_matches "$node_bin" "$cli" "0.84.4"; then
     record "helper 0.84.40 exit 0 rejected" "MATCH" "NO MATCH"
   else
     record "helper 0.84.40 exit 0 rejected" "PASS" "PASS"
   fi
-  printf '#!/bin/sh\nexit 0\n' > "$bin"
-  if cloud_tools_pi_version_matches "$bin" "0.84.4"; then
+  write_mock_node_cli "$node_bin" "$cli" "$log" "" "0"
+  if cloud_tools_pi_version_matches "$node_bin" "$cli" "0.84.4"; then
     record "helper empty exit 0 rejected" "MATCH" "NO MATCH"
   else
     record "helper empty exit 0 rejected" "PASS" "PASS"
   fi
-  printf '#!/bin/sh\nexit 42\n' > "$bin"
-  if cloud_tools_pi_version_matches "$bin" "0.84.4"; then
+  write_mock_node_cli "$node_bin" "$cli" "$log" "" "42"
+  if cloud_tools_pi_version_matches "$node_bin" "$cli" "0.84.4"; then
     record "helper empty exit 42 rejected" "MATCH" "NO MATCH"
   else
     record "helper empty exit 42 rejected" "PASS" "PASS"
@@ -797,19 +822,21 @@ EOF
 }
 
 finding7_probe_home_hostile_tmpdir() {
-  local tmpdir bin homelog
+  local tmpdir node_bin cli homelog
   tmpdir="$(mktemp -d)"
-  bin="${tmpdir}/pi"
+  node_bin="${tmpdir}/node"
+  cli="${tmpdir}/cli.js"
   homelog="${tmpdir}/home.log"
-  cat > "$bin" <<EOF
+  printf 'fake-pi-cli\n' > "$cli"
+  cat > "$node_bin" <<EOF
 #!/bin/sh
 printf '%s\n' "\$HOME" > "$homelog"
 mkdir -p "\$HOME/.pi/agent"
 printf '{}\n' > "\$HOME/.pi/agent/auth.json"
 printf '%s\n' "0.84.4"
 EOF
-  chmod +x "$bin"
-  TMPDIR="$ROOT" cloud_tools_pi_version_matches "$bin" "0.84.4" >/dev/null || true
+  chmod +x "$node_bin"
+  TMPDIR="$ROOT" cloud_tools_pi_version_matches "$node_bin" "$cli" "0.84.4" >/dev/null || true
   if [ ! -s "$homelog" ]; then
     record "helper probe HOME ignores TMPDIR=ROOT" "no HOME" "outside"
   elif cloud_tools_repo_contains_path "$(cat "$homelog")"; then
@@ -820,7 +847,7 @@ EOF
     record "helper probe HOME ignores TMPDIR=ROOT" "PASS" "PASS"
   fi
   : > "$homelog"
-  TMPDIR="${ROOT}/.cursor" cloud_tools_pi_version_matches "$bin" "0.84.4" >/dev/null || true
+  TMPDIR="${ROOT}/.cursor" cloud_tools_pi_version_matches "$node_bin" "$cli" "0.84.4" >/dev/null || true
   if [ ! -s "$homelog" ]; then
     record "helper probe HOME ignores TMPDIR=ROOT/.cursor" "no HOME" "outside"
   elif cloud_tools_repo_contains_path "$(cat "$homelog")"; then
@@ -845,22 +872,18 @@ finding7_wrapper_probe_home_hostile_tmpdir() {
 }
 
 finding7_probe_home_failure_skips_pi() {
-  local tmpdir bin log survived
+  local tmpdir node_bin cli log survived
   tmpdir="$(mktemp -d)"
-  bin="${tmpdir}/pi"
+  node_bin="${tmpdir}/node"
+  cli="${tmpdir}/cli.js"
   log="${tmpdir}/argv.log"
-  cat > "$bin" <<EOF
-#!/bin/sh
-printf '%s\n' "\$*" >> "$log"
-printf '%s\n' "0.84.4"
-EOF
-  chmod +x "$bin"
+  write_mock_node_cli "$node_bin" "$cli" "$log"
   # set +e so a mere return 1 would continue and print SURVIVED.
   # cloud_tools_fail must exit the subshell before that marker.
   survived="$(
     set +e
     cloud_tools_pi_mktemp_probe_home() { return 1; }
-    cloud_tools_pi_version_matches "$bin" "0.84.4"
+    cloud_tools_pi_version_matches "$node_bin" "$cli" "0.84.4"
     printf 'SURVIVED\n'
   )" || true
   if [ -s "$log" ]; then
@@ -898,18 +921,24 @@ EOF
 
 write_ready_node_prefix() {
   local prefix="$1"
-  local node_ver="${2:-v22.23.2}"
-  local npm_ver="${3:-10.9.8}"
+  local node_ver="${2-v22.23.2}"
+  local npm_ver="${3-10.9.8}"
+  local node_rc="${4-0}"
+  local npm_rc="${5-0}"
+  local log="${6-}"
   mkdir -p "${prefix}/bin" "${prefix}/lib/node_modules/npm/bin"
   cat > "${prefix}/bin/node" <<EOF
 #!/bin/sh
+if [ -n "${log}" ]; then
+  printf 'INVOKED %s\n' "\$*" >> "${log}"
+fi
 if [ "\$1" = "--version" ]; then
   printf '%s\\n' "${node_ver}"
-  exit 0
+  exit ${node_rc}
 fi
 if [ "\$2" = "--version" ]; then
   printf '%s\\n' "${npm_ver}"
-  exit 0
+  exit ${npm_rc}
 fi
 exit 1
 EOF
@@ -977,17 +1006,126 @@ finding8_nodejs_prefix_ready() {
   else
     record "same-version system Node, prefix absent" "PASS" "PASS"
   fi
+
+  write_ready_node_prefix "$prefix" "v22.23.2" "10.9.8" "42" "0"
+  if cloud_tools_pinned_nodejs_prefix_ready "$prefix"; then
+    record "Node v22.23.2 exit 42" "PASS" "FAIL"
+  else
+    record "Node v22.23.2 exit 42" "PASS" "PASS"
+  fi
+
+  write_ready_node_prefix "$prefix" "v22.23.2" "10.9.8" "0" "42"
+  if cloud_tools_pinned_nodejs_prefix_ready "$prefix"; then
+    record "npm 10.9.8 exit 42" "PASS" "FAIL"
+  else
+    record "npm 10.9.8 exit 42" "PASS" "PASS"
+  fi
+
+  write_ready_node_prefix "$prefix" "" "10.9.8" "0" "0"
+  if cloud_tools_pinned_nodejs_prefix_ready "$prefix"; then
+    record "Node empty exit 0" "PASS" "FAIL"
+  else
+    record "Node empty exit 0" "PASS" "PASS"
+  fi
+
+  write_ready_node_prefix "$prefix" "v22.23.2" "" "0" "0"
+  if cloud_tools_pinned_nodejs_prefix_ready "$prefix"; then
+    record "npm empty exit 0" "PASS" "FAIL"
+  else
+    record "npm empty exit 0" "PASS" "PASS"
+  fi
+  rm -rf "$tmpdir"
+}
+
+finding8_node_rejected_before_exec() {
+  local tmpdir prefix outside log
+  tmpdir="$(mktemp -d)"
+  prefix="${tmpdir}/node-${NODE_VERSION}"
+  outside="$(mktemp -d)"
+  log="${tmpdir}/argv.log"
+
+  write_ready_node_prefix "${outside}/real" "v22.23.2" "10.9.8" "0" "0" "$log"
+  ln -sfn "${outside}/real" "$prefix"
+  : > "$log"
+  if cloud_tools_pinned_nodejs_prefix_ready "$prefix"; then
+    record "relocated prefix rejected before exec" "PASS" "FAIL"
+  elif [ -s "$log" ]; then
+    record "relocated prefix rejected before exec" "probed: $(cat "$log")" "empty"
+  else
+    record "relocated prefix rejected before exec" "PASS" "PASS"
+  fi
+
+  rm -rf "$prefix"
+  write_ready_node_prefix "$prefix" "v22.23.2" "10.9.8" "0" "0" "$log"
+  cat > "${outside}/evil-node" <<EOF
+#!/bin/sh
+printf 'INVOKED %s\n' "\$*" >> "$log"
+printf 'v22.23.2\n'
+exit 0
+EOF
+  chmod +x "${outside}/evil-node"
+  ln -sfn "${outside}/evil-node" "${prefix}/bin/node"
+  : > "$log"
+  if cloud_tools_pinned_nodejs_prefix_ready "$prefix"; then
+    record "prefix/bin/node external same-version rejected before exec" "PASS" "FAIL"
+  elif [ -s "$log" ]; then
+    record "prefix/bin/node external same-version rejected before exec" "probed: $(cat "$log")" "empty"
+  else
+    record "prefix/bin/node external same-version rejected before exec" "PASS" "PASS"
+  fi
+
+  write_ready_node_prefix "$prefix" "v22.23.2" "10.9.8" "0" "0" "$log"
+  mv "${prefix}/bin/node" "${prefix}/lib/other-node"
+  ln -sfn "../lib/other-node" "${prefix}/bin/node"
+  : > "$log"
+  if cloud_tools_pinned_nodejs_prefix_ready "$prefix"; then
+    record "prefix/bin/node alternate internal target rejected" "PASS" "FAIL"
+  elif [ -s "$log" ]; then
+    record "prefix/bin/node alternate internal target rejected" "probed: $(cat "$log")" "empty"
+  else
+    record "prefix/bin/node alternate internal target rejected" "PASS" "PASS"
+  fi
+
+  write_ready_node_prefix "$prefix"
+  ln -sfn "$outside" "${prefix}/lib/node_modules/npm/bin/npm-cli.js"
+  : > "$log"
+  if cloud_tools_pinned_nodejs_prefix_ready "$prefix"; then
+    record "npm-cli.js external symlink rejected before exec" "PASS" "FAIL"
+  else
+    record "npm-cli.js external symlink rejected before exec" "PASS" "PASS"
+  fi
+  rm -rf "$tmpdir" "$outside"
+}
+
+finding8_prefix_hardened_rejects_user_tree() {
+  local tmpdir prefix
+  tmpdir="$(mktemp -d)"
+  prefix="${tmpdir}/node-${NODE_VERSION}"
+  write_ready_node_prefix "$prefix"
+  if cloud_tools_pinned_nodejs_prefix_ready "$prefix" \
+    && ! cloud_tools_pinned_nodejs_prefix_hardened "$prefix"; then
+    record "user-owned prefix is ready but not hardened" "PASS" "PASS"
+  else
+    record "user-owned prefix is ready but not hardened" "unexpected" "ready+not-hardened"
+  fi
   rm -rf "$tmpdir"
 }
 
 finding8_pin_drift_node_prefix() {
-  local encoded want
+  local encoded want cli_line
   encoded="$(sed -n 's/^PI_PINNED_NODE_PREFIX="\(.*\)"/\1/p' "${ROOT}/.cursor/pi-review.sh" | head -n 1)"
   want="/usr/local/lib/nodejs/node-${NODE_VERSION}"
   if [ "$encoded" = "$want" ]; then
     record "install.sh NODE_VERSION matches pi-review PI_PINNED_NODE_PREFIX" "PASS" "PASS"
   else
     record "install.sh NODE_VERSION matches pi-review PI_PINNED_NODE_PREFIX" "${encoded}" "${want}"
+  fi
+  cli_line="$(sed -n 's/^PI_PINNED_CLI="\(.*\)"/\1/p' "${ROOT}/.cursor/pi-review.sh" | head -n 1)"
+  if printf '%s\n' "$cli_line" | grep -Fq 'dist/bundle/cli.js' \
+    && printf '%s\n' "$cli_line" | grep -Fq 'PI_PINNED_NODE_PREFIX'; then
+    record "Pi 0.84.4 CLI remains dist/bundle/cli.js" "PASS" "PASS"
+  else
+    record "Pi 0.84.4 CLI remains dist/bundle/cli.js" "${cli_line}" "PI_PINNED_NODE_PREFIX/.../dist/bundle/cli.js"
   fi
 }
 
@@ -1035,9 +1173,53 @@ finding7_probe_home_hostile_tmpdir
 finding7_wrapper_probe_home_hostile_tmpdir
 finding7_probe_home_failure_skips_pi
 finding7_wrapper_probe_home_failure_skips_pi
+finding9_wrapper_malicious_path_node() {
+  local tmpdir mock_bin log rc output
+  tmpdir="$(mktemp -d)"
+  mock_bin="${tmpdir}/bin"
+  log="${tmpdir}/node.log"
+  mkdir -p "$mock_bin"
+  cat > "${mock_bin}/node" <<EOF
+#!/bin/sh
+printf 'INVOKED %s\n' "\$*" >> "$log"
+printf 'forged\n'
+exit 0
+EOF
+  chmod +x "${mock_bin}/node"
+  rc=0
+  output="$(PATH="${mock_bin}:${PATH}" "${ROOT}/.cursor/pi-review.sh" --check 2>&1)" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    record "legitimate Pi + malicious PATH Node" "rc=$rc" "0"
+  elif ! printf '%s\n' "$output" | grep -Fq "pi-review check: ok"; then
+    record "legitimate Pi + malicious PATH Node" "no ok" "ok"
+  elif [ -s "$log" ]; then
+    record "legitimate Pi + malicious PATH Node" "probed: $(cat "$log")" "empty"
+  else
+    record "legitimate Pi + malicious PATH Node" "PASS" "PASS"
+  fi
+  rm -rf "$tmpdir"
+}
+
+finding9_repo_npm_ci_uses_pinned_paths() {
+  if grep -nE '^\s+npm ci\s*$|^\s+node --version|^\s+npm --version' "${ROOT}/.cursor/install.sh" >/dev/null; then
+    record "install.sh has no PATH npm ci / node --version" "present" "absent"
+  elif grep -Fq '"$prefix_node" "$npm_cli" ci' "${ROOT}/.cursor/install.sh" \
+    && grep -Fq '"$node_bin" "$npm_cli" pack' "${ROOT}/.cursor/install.sh" \
+    && grep -Fq '"$node_bin" "$npm_cli" install' "${ROOT}/.cursor/install.sh" \
+    && grep -Fq '"$PI_PINNED_NODE" "$PI_PINNED_CLI" --version' "${ROOT}/.cursor/pi-review.sh"; then
+    record "pack/install/ci/wrapper use pinned Node + CLI" "PASS" "PASS"
+  else
+    record "pack/install/ci/wrapper use pinned Node + CLI" "missing invocation" "pinned"
+  fi
+}
+
 finding8_nodejs_prefix_ready
+finding8_node_rejected_before_exec
+finding8_prefix_hardened_rejects_user_tree
 finding8_pin_drift_node_prefix
 finding8_wrapper_accepts_pinned_pi
+finding9_wrapper_malicious_path_node
+finding9_repo_npm_ci_uses_pinned_paths
 
 echo "pi phase1 contract: ${pass} passed, ${fail} failed"
 [ "$fail" -eq 0 ]
