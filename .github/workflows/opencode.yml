@@ -8,19 +8,26 @@ on:
 
 jobs:
   opencode:
-    # No regex in expressions: toJSON() renders tab/newline/CR as the two-char
-    # sequences \t \n \r, which match the literals below; padding unifies
-    # start/end of comment with the space boundary. Longer tokens such as
-    # /occlusion or /opencode-config never match.
+    # Trusted commenters only: both comment events can be created by anyone on
+    # a public repo, and this job receives OPENCODE_API_KEY plus the OIDC
+    # capability. OWNER/MEMBER/COLLABORATOR covers the owner and granted
+    # collaborators; outsiders and bots (NONE) can no longer launch the agent.
+    # Command-boundary matching: no regex in expressions, so toJSON() renders
+    # tab/newline/CR as the two-char sequences \t \n \r, which match the
+    # literals below; padding unifies start/end of comment with space.
+    # Longer tokens such as /occlusion or /opencode-config never match.
     if: |
-      contains(toJSON(format(' {0} ', github.event.comment.body)), ' /oc ') ||
+      (contains(toJSON(format(' {0} ', github.event.comment.body)), ' /oc ') ||
       contains(toJSON(format(' {0} ', github.event.comment.body)), ' /oc\n') ||
       contains(toJSON(format(' {0} ', github.event.comment.body)), ' /oc\t') ||
       contains(toJSON(format(' {0} ', github.event.comment.body)), ' /oc\r') ||
       contains(toJSON(format(' {0} ', github.event.comment.body)), ' /opencode ') ||
       contains(toJSON(format(' {0} ', github.event.comment.body)), ' /opencode\n') ||
       contains(toJSON(format(' {0} ', github.event.comment.body)), ' /opencode\t') ||
-      contains(toJSON(format(' {0} ', github.event.comment.body)), ' /opencode\r')
+      contains(toJSON(format(' {0} ', github.event.comment.body)), ' /opencode\r')) &&
+      (github.event.comment.author_association == 'OWNER' ||
+      github.event.comment.author_association == 'MEMBER' ||
+      github.event.comment.author_association == 'COLLABORATOR')
     runs-on: ubuntu-latest
     permissions:
       id-token: write
