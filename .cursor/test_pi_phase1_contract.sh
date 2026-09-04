@@ -4,6 +4,10 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Preserve the caller PATH before sourcing install.sh. The installer must not
+# sanitize PATH as a sourced side effect; algorithm tests may need a
+# CI-provided Node (toolcache/nvm) that is not the pinned prefix.
+ORIGINAL_TEST_PATH="$PATH"
 # shellcheck source=.cursor/install.sh
 source "${ROOT}/.cursor/install.sh"
 
@@ -24,14 +28,36 @@ record() {
   fi
 }
 
-pinned_node() {
-  local prefix_node="/usr/local/lib/nodejs/node-${NODE_VERSION}/bin/node"
-  if [ -x "$prefix_node" ]; then
-    printf '%s' "$prefix_node"
+# Capability probe for isolated SRI/handoff tests. Does not require
+# `node --version == v22.23.2`. Production pins remain exact elsewhere.
+node_supports_sri_algorithm() {
+  local node_bin="$1"
+  local probe
+  [ -x "$node_bin" ] || return 1
+  probe="$(
+    unset NODE_OPTIONS NODE_PATH
+    "$node_bin" --input-type=commonjs -e '
+const fs = require("fs");
+const crypto = require("crypto");
+if (typeof fs.readFileSync !== "function") process.exit(1);
+if (typeof crypto.createHash !== "function") process.exit(1);
+const digest = crypto.createHash("sha512").update("hello\n").digest("base64");
+process.stdout.write("sha512-" + digest);
+'
+  2>/dev/null)" || return 1
+  [ "$probe" = "sha512-58IrmUxZ2c8rSOVJseJGZmNgRZMNPafBrLKZ0cO3+TH5Sq5B7dosKyB6NuEPi8uNRSI+VIePWzFufOO2vAGWKQ==" ]
+}
+
+compatible_node_for_algorithm_tests() {
+  local candidate
+  candidate="/usr/local/lib/nodejs/node-${NODE_VERSION}/bin/node"
+  if node_supports_sri_algorithm "$candidate"; then
+    printf '%s' "$candidate"
     return 0
   fi
-  if command -v node >/dev/null 2>&1 && [ "$(node --version 2>/dev/null || true)" = "$NODE_VERSION" ]; then
-    command -v node
+  candidate="$(PATH="${ORIGINAL_TEST_PATH}" command -v node || true)"
+  if [ -n "$candidate" ] && node_supports_sri_algorithm "$candidate"; then
+    printf '%s' "$candidate"
     return 0
   fi
   return 1
@@ -359,12 +385,10 @@ EOF
   : > "$log"
   rc=0
   run_wrapper "$mock_bin" --check >/dev/null 2>&1 || rc=$?
-  if [ "$rc" -eq 0 ]; then
-    record "wrapper --check rejects prepended mock Pi" "ok" "fail"
-  elif [ -s "$log" ]; then
-    record "wrapper --check rejects prepended mock Pi" "probed: $(cat "$log")" "empty"
+  if [ -s "$log" ]; then
+    record "wrapper --check ignores prepended mock Pi" "probed: $(cat "$log")" "empty"
   else
-    record "wrapper --check rejects prepended mock Pi" "PASS" "PASS"
+    record "wrapper --check ignores prepended mock Pi" "PASS" "PASS"
   fi
 
   rm -rf "$tmpdir"
@@ -374,8 +398,8 @@ EOF
 
 finding4_known_sri() {
   local tmpdir file node_bin actual
-  node_bin="$(pinned_node)" || {
-    record "known SHA-512 SRI via pinned Node" "no node ${NODE_VERSION}" "present"
+  node_bin="$(compatible_node_for_algorithm_tests)" || {
+    record "known SHA-512 SRI via compatible Node" "no capable node" "present"
     return 0
   }
   tmpdir="$(mktemp -d)"
@@ -383,17 +407,17 @@ finding4_known_sri() {
   printf 'hello\n' > "$file"
   actual="$(cloud_tools_sha512_sri "$file" "$node_bin")"
   if [ "$actual" = "sha512-58IrmUxZ2c8rSOVJseJGZmNgRZMNPafBrLKZ0cO3+TH5Sq5B7dosKyB6NuEPi8uNRSI+VIePWzFufOO2vAGWKQ==" ]; then
-    record "known SHA-512 SRI via pinned Node" "PASS" "PASS"
+    record "known SHA-512 SRI via compatible Node" "PASS" "PASS"
   else
-    record "known SHA-512 SRI via pinned Node" "$actual" "sha512-58Irm..."
+    record "known SHA-512 SRI via compatible Node" "$actual" "sha512-58Irm..."
   fi
   rm -rf "$tmpdir"
 }
 
 finding4_sri_mismatch() {
   local tmpdir file node_bin actual
-  node_bin="$(pinned_node)" || {
-    record "SRI mismatch rejected" "no node ${NODE_VERSION}" "present"
+  node_bin="$(compatible_node_for_algorithm_tests)" || {
+    record "SRI mismatch rejected" "no capable node" "present"
     return 0
   }
   tmpdir="$(mktemp -d)"
@@ -748,8 +772,8 @@ EOF
 
 finding4_verified_pack_handoff() {
   local tmpdir pack_dir prefix log node_bin npm_cli tgz sri
-  node_bin="$(pinned_node)" || {
-    record "verified pack handoff installs hashed tarball" "no node ${NODE_VERSION}" "present"
+  node_bin="$(compatible_node_for_algorithm_tests)" || {
+    record "verified pack handoff installs hashed tarball" "no capable node" "present"
     return 0
   }
   tmpdir="$(mktemp -d)"
@@ -865,12 +889,10 @@ EOF
   chmod +x "${mock_bin}/pi"
   rc=0
   run_wrapper "$mock_bin" --check >/dev/null 2>&1 || rc=$?
-  if [ "$rc" -eq 0 ]; then
-    record "malicious same-version Pi first on PATH is rejected" "ok" "fail"
-  elif [ -s "$log" ]; then
-    record "malicious same-version Pi first on PATH is rejected" "probed: $(cat "$log")" "empty"
+  if [ -s "$log" ]; then
+    record "malicious same-version Pi first on PATH is ignored" "probed: $(cat "$log")" "empty"
   else
-    record "malicious same-version Pi first on PATH is rejected" "PASS" "PASS"
+    record "malicious same-version Pi first on PATH is ignored" "PASS" "PASS"
   fi
   rm -rf "$tmpdir"
 }
@@ -951,24 +973,23 @@ finding7_probe_home_failure_skips_pi() {
 }
 
 finding7_wrapper_probe_home_failure_skips_pi() {
-  local tmpdir mock_bin err rc
+  local tmpdir mock_bin log rc
   tmpdir="$(mktemp -d)"
   mock_bin="${tmpdir}/bin"
-  err="${tmpdir}/err.log"
+  log="${tmpdir}/mktemp.log"
   mkdir -p "$mock_bin"
-  cat > "${mock_bin}/mktemp" <<'EOF'
+  cat > "${mock_bin}/mktemp" <<EOF
 #!/bin/sh
+printf 'INVOKED %s\n' "\$*" >> "$log"
 exit 1
 EOF
   chmod +x "${mock_bin}/mktemp"
   rc=0
-  PATH="${mock_bin}:${PATH}" "${ROOT}/.cursor/pi-review.sh" --check >/dev/null 2>"$err" || rc=$?
-  if [ "$rc" -eq 0 ]; then
-    record "wrapper failed probe HOME never invokes Pi" "ok" "fail"
-  elif ! grep -Fq "no se pudo crear un HOME temporal seguro para Pi" "$err"; then
-    record "wrapper failed probe HOME never invokes Pi" "err=$(tr '\n' ' ' < "$err")" "probe-home fail"
+  PATH="${mock_bin}:${PATH}" "${ROOT}/.cursor/pi-review.sh" --check >/dev/null 2>&1 || rc=$?
+  if [ -s "$log" ]; then
+    record "wrapper ignores PATH mktemp" "probed: $(cat "$log")" "empty"
   else
-    record "wrapper failed probe HOME never invokes Pi" "PASS" "PASS"
+    record "wrapper ignores PATH mktemp" "PASS" "PASS"
   fi
   rm -rf "$tmpdir"
 }
@@ -1377,6 +1398,246 @@ finding8_pin_drift_node_prefix
 finding8_wrapper_accepts_pinned_pi
 finding9_wrapper_malicious_path_node
 finding9_repo_npm_ci_uses_pinned_paths
+
+finding_source_preserves_caller_path() {
+  if [ "$PATH" = "$ORIGINAL_TEST_PATH" ]; then
+    record "sourcing install.sh preserves caller PATH" "PASS" "PASS"
+  else
+    record "sourcing install.sh preserves caller PATH" "$PATH" "$ORIGINAL_TEST_PATH"
+  fi
+}
+
+finding_wrapper_path_contract() {
+  local shebang
+  shebang="$(head -n 1 "${ROOT}/.cursor/pi-review.sh")"
+  if [ "$shebang" = "#!/bin/bash" ]; then
+    record "wrapper shebang is /bin/bash" "PASS" "PASS"
+  else
+    record "wrapper shebang is /bin/bash" "$shebang" "#!/bin/bash"
+  fi
+  if grep -nE '(^|[[:space:]`$])dirname($|[[:space:]"`])' "${ROOT}/.cursor/pi-review.sh" \
+    >/dev/null; then
+    record "wrapper derives root without external dirname" "dirname present" "absent"
+  else
+    record "wrapper derives root without external dirname" "PASS" "PASS"
+  fi
+  if grep -nE '(^|[[:space:]`$])dirname($|[[:space:]"`])' "${ROOT}/.cursor/install.sh" \
+    >/dev/null; then
+    record "install.sh derives root without external dirname" "dirname present" "absent"
+  else
+    record "install.sh derives root without external dirname" "PASS" "PASS"
+  fi
+  if grep -Fq 'PATH="/usr/local/cargo/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin"' \
+    "${ROOT}/.cursor/pi-review.sh" \
+    && grep -Fq 'cloud_tools_bootstrap_execution_environment' "${ROOT}/.cursor/install.sh"; then
+    record "controlled PATH does not append caller PATH" "PASS" "PASS"
+  else
+    record "controlled PATH does not append caller PATH" "missing" "controlled PATH"
+  fi
+}
+
+finding_environment_install_uses_bin_bash() {
+  if grep -Fq '"install": "/bin/bash .cursor/install.sh"' "${ROOT}/.cursor/environment.json" \
+    && ! grep -Fq '"install": "bash .cursor/install.sh"' "${ROOT}/.cursor/environment.json" \
+    && grep -Fq '"start": "bash .cursor/start.sh"' "${ROOT}/.cursor/environment.json"; then
+    record "environment.json install names /bin/bash" "PASS" "PASS"
+  else
+    record "environment.json install names /bin/bash" "changed beyond install" "/bin/bash install"
+  fi
+}
+
+finding4_algorithm_node_not_version_pinned() {
+  local helper_src nvm_or_other ver node_bin
+  helper_src="$(declare -f compatible_node_for_algorithm_tests node_supports_sri_algorithm)"
+  if printf '%s\n' "$helper_src" | grep -E -- '--version' >/dev/null; then
+    record "algorithm Node helper does not require --version" "version probe" "capability only"
+  else
+    record "algorithm Node helper does not require --version" "PASS" "PASS"
+  fi
+  node_bin="$(compatible_node_for_algorithm_tests)" || {
+    record "algorithm tests selected a capable Node" "none" "present"
+    return 0
+  }
+  printf 'algorithm-test node: %s\n' "$node_bin"
+  if node_supports_sri_algorithm "$node_bin"; then
+    record "algorithm tests selected a capable Node" "PASS" "PASS"
+  else
+    record "algorithm tests selected a capable Node" "probe failed" "capable"
+  fi
+  nvm_or_other=""
+  while IFS= read -r candidate; do
+    [ -n "$candidate" ] || continue
+    [ -x "$candidate" ] || continue
+    ver="$("$candidate" --version 2>/dev/null || true)"
+    if [ -n "$ver" ] && [ "$ver" != "$NODE_VERSION" ] && node_supports_sri_algorithm "$candidate"; then
+      nvm_or_other="$candidate"
+      break
+    fi
+  done < <(PATH="${ORIGINAL_TEST_PATH}" type -a -p node 2>/dev/null || true)
+  if [ -n "$nvm_or_other" ]; then
+    record "non-pinned capable Node passes algorithm probe" "PASS" "PASS"
+    printf 'non-pinned algorithm node: %s (%s)\n' "$nvm_or_other" "$("$nvm_or_other" --version 2>/dev/null || true)"
+  else
+    record "non-pinned capable Node not required when absent" "PASS" "PASS"
+  fi
+}
+
+finding_harden_umask_group_writable() {
+  local tmpdir prefix log outside hits
+  tmpdir="$(mktemp -d)"
+  prefix="${tmpdir}/node-${NODE_VERSION}"
+  log="${tmpdir}/argv.log"
+  outside="${tmpdir}/outside-target"
+  : > "$log"
+  write_ready_node_prefix "$prefix" "v22.23.2" "10.9.8" "0" "0" "$log"
+  chmod 0775 "$prefix" "${prefix}/bin" "${prefix}/lib" "${prefix}/lib/node_modules" \
+    "${prefix}/lib/node_modules/npm" "${prefix}/lib/node_modules/npm/bin" \
+    "${prefix}/bin/node"
+  chmod 0664 "${prefix}/lib/node_modules/npm/bin/npm-cli.js"
+  printf 'outside\n' > "$outside"
+  chmod 0666 "$outside"
+  ln -sfn "$outside" "${prefix}/bin/outside-link"
+
+  : > "$log"
+  if cloud_tools_pinned_nodejs_prefix_hardened "$prefix"; then
+    record "umask 0002 prefix rejected before harden" "PASS" "FAIL"
+    sudo rm -rf "$tmpdir"
+    return 0
+  fi
+  record "umask 0002 prefix rejected before harden" "PASS" "PASS"
+  if [ -s "$log" ]; then
+    record "umask 0002 prefix not probed before harden" "probed: $(cat "$log")" "empty"
+  else
+    record "umask 0002 prefix not probed before harden" "PASS" "PASS"
+  fi
+
+  if ! (cloud_tools_harden_pinned_nodejs_prefix "$prefix"); then
+    record "umask 0002 prefix hardened after helper" "helper failed" "PASS"
+    sudo rm -rf "$tmpdir"
+    return 0
+  fi
+  if cloud_tools_pinned_nodejs_prefix_hardened "$prefix"; then
+    record "umask 0002 prefix hardened after helper" "PASS" "PASS"
+  else
+    record "umask 0002 prefix hardened after helper" "NO" "PASS"
+  fi
+
+  hits="$(sudo /usr/bin/find -P "$prefix" ! -type l -perm /022 -print)"
+  if [ -z "$hits" ]; then
+    record "no group/other-writable non-symlink entries after harden" "PASS" "PASS"
+  else
+    record "no group/other-writable non-symlink entries after harden" "$hits" "empty"
+  fi
+
+  if [ "$(stat -c '%a' "$outside")" = "666" ]; then
+    record "harden does not chmod symlink targets outside prefix" "PASS" "PASS"
+  else
+    record "harden does not chmod symlink targets outside prefix" "$(stat -c '%a' "$outside")" "666"
+  fi
+
+  : > "$log"
+  if cloud_tools_pinned_nodejs_prefix_reusable "$prefix"; then
+    record "reusable succeeds only after harden" "PASS" "PASS"
+  else
+    record "reusable succeeds only after harden" "NO" "PASS"
+  fi
+  sudo rm -rf "$tmpdir"
+}
+
+finding_unhardened_never_publishes() {
+  local tmpdir prefix log
+  tmpdir="$(mktemp -d)"
+  prefix="${tmpdir}/node-${NODE_VERSION}"
+  log="${tmpdir}/publish.log"
+  write_ready_node_prefix "$prefix" "v22.23.2" "10.9.8" "0" "0"
+  chmod 0775 "${prefix}/bin/node"
+  : > "$log"
+  (
+    cloud_tools_publish_pinned_pi() { printf 'PUBLISH\n' >> "$log"; }
+    if ! cloud_tools_pinned_nodejs_prefix_reusable "$prefix"; then
+      cloud_tools_fail "not reusable"
+    fi
+    cloud_tools_publish_pinned_pi "$prefix" "${prefix}/bin/pi" "${tmpdir}/dest"
+  ) >/dev/null 2>&1 || true
+  if [ -s "$log" ]; then
+    record "unhardened prefix never reaches publish" "published" "blocked"
+  else
+    record "unhardened prefix never reaches publish" "PASS" "PASS"
+  fi
+  rm -rf "$tmpdir"
+}
+
+finding_pi_post_install_order() {
+  local body tail pack_n harden_n reusable_n publish_n node_body
+  body="$(declare -f install_pinned_pi)"
+  tail="$(printf '%s\n' "$body" | sed -n '/cloud_tools_pi_install_verified_pack/,$p')"
+  pack_n="$(printf '%s\n' "$tail" | grep -n 'cloud_tools_pi_install_verified_pack' | head -n 1 | cut -d: -f1)"
+  harden_n="$(printf '%s\n' "$tail" | grep -n 'cloud_tools_harden_pinned_nodejs_prefix' | head -n 1 | cut -d: -f1)"
+  reusable_n="$(printf '%s\n' "$tail" | grep -n 'cloud_tools_pinned_nodejs_prefix_reusable' | head -n 1 | cut -d: -f1)"
+  publish_n="$(printf '%s\n' "$tail" | grep -n 'cloud_tools_publish_pinned_pi' | head -n 1 | cut -d: -f1)"
+  if [ -n "$pack_n" ] && [ -n "$harden_n" ] && [ -n "$reusable_n" ] && [ -n "$publish_n" ] \
+    && [ "$pack_n" -lt "$harden_n" ] && [ "$harden_n" -lt "$reusable_n" ] \
+    && [ "$reusable_n" -lt "$publish_n" ]; then
+    record "install_pinned_pi hardens and reuses before publish" "PASS" "PASS"
+  else
+    record "install_pinned_pi hardens and reuses before publish" \
+      "pack=${pack_n:-?} harden=${harden_n:-?} reusable=${reusable_n:-?} publish=${publish_n:-?}" \
+      "pack<harden<reusable<publish"
+  fi
+  node_body="$(declare -f install_pinned_nodejs)"
+  if printf '%s\n' "$node_body" | grep -Fq 'cloud_tools_harden_pinned_nodejs_prefix'; then
+    record "install_pinned_nodejs uses shared harden helper" "PASS" "PASS"
+  else
+    record "install_pinned_nodejs uses shared harden helper" "missing" "shared helper"
+  fi
+  if [ "$(grep -c '^cloud_tools_harden_pinned_nodejs_prefix()' "${ROOT}/.cursor/install.sh")" = "1" ]; then
+    record "shared harden helper has one definition" "PASS" "PASS"
+  else
+    record "shared harden helper has one definition" "count mismatch" "1"
+  fi
+}
+
+finding_wrapper_hostile_path_utilities() {
+  local tmpdir mock_bin rc output name
+  tmpdir="$(mktemp -d)"
+  mock_bin="${tmpdir}/bin"
+  mkdir -p "$mock_bin"
+  for name in bash dirname find mktemp node npm pi; do
+    cat > "${mock_bin}/${name}" <<EOF
+#!/bin/sh
+printf 'INVOKED %s\n' "\$*" >> "${tmpdir}/${name}.log"
+exit 0
+EOF
+    chmod +x "${mock_bin}/${name}"
+  done
+  rc=0
+  output="$(PATH="${mock_bin}:${PATH}" "${ROOT}/.cursor/pi-review.sh" --check 2>&1)" || rc=$?
+  for name in bash dirname find mktemp node npm pi; do
+    if [ -s "${tmpdir}/${name}.log" ]; then
+      record "hostile PATH ${name} log empty" "probed: $(cat "${tmpdir}/${name}.log")" "empty"
+    else
+      record "hostile PATH ${name} log empty" "PASS" "PASS"
+    fi
+  done
+  if [ "$rc" -eq 0 ] && printf '%s\n' "$output" | grep -Fq "pi-review check: ok"; then
+    record "hostile PATH wrapper --check" "PASS" "PASS"
+  elif [ "$rc" -ne 0 ] && ! printf '%s\n' "$output" | grep -Fq "INVOKED"; then
+    # Pi may not be published yet; mocks must still stay silent.
+    record "hostile PATH wrapper --check" "PASS" "PASS"
+  else
+    record "hostile PATH wrapper --check" "rc=${rc} out=$(printf '%s' "$output" | tr '\n' ' ')" "ok or fail-closed"
+  fi
+  rm -rf "$tmpdir"
+}
+
+finding_source_preserves_caller_path
+finding_wrapper_path_contract
+finding_environment_install_uses_bin_bash
+finding4_algorithm_node_not_version_pinned
+finding_harden_umask_group_writable
+finding_unhardened_never_publishes
+finding_pi_post_install_order
+finding_wrapper_hostile_path_utilities
 
 echo "pi phase1 contract: ${pass} passed, ${fail} failed"
 [ "$fail" -eq 0 ]

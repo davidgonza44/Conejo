@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # Único punto de entrada aprobado para Pi en Cloud Agents (Fase 1).
 # Fase 1: solo --check. No envía prompts, no autentica y no llama a un modelo.
 #
@@ -7,16 +7,27 @@
 # Nunca se exponen bash, write ni edit.
 set -euo pipefail
 
+# Controlled PATH before any external command. Do not append caller PATH.
+PATH="/usr/local/cargo/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin"
+export PATH
 # Node loader hooks must never reach the pinned CLI: an ambient NODE_OPTIONS
 # (--require/--import) or NODE_PATH would load attacker JavaScript into the
 # trusted Node process before the authenticated CLI runs.
 unset NODE_OPTIONS NODE_PATH
+hash -r
 
 PI_PACKAGE="@earendil-works/pi-coding-agent"
 PI_EXPECTED_VERSION="0.84.4"
 PI_READONLY_TOOLS="read,grep,find,ls"
 PI_FORBIDDEN_TOOLS="bash,write,edit"
-PI_REVIEW_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Builtin-only root: parameter expansion + cd + pwd -P. No external utility.
+_pi_review_src="${BASH_SOURCE[0]}"
+case "$_pi_review_src" in
+  */*) ;;
+  *) _pi_review_src="./${_pi_review_src}" ;;
+esac
+PI_REVIEW_ROOT="$(cd "${_pi_review_src%/*}/.." && pwd -P)"
+unset _pi_review_src
 # Hardcoded trust root. Must stay equal to install.sh NODE_VERSION.
 # Do not override from the environment.
 PI_PINNED_NODE_PREFIX="/usr/local/lib/nodejs/node-v22.23.2"
@@ -136,7 +147,7 @@ pi_review_mktemp_home() {
   if [ ! -d /tmp ] || [ ! -w /tmp ]; then
     return 1
   fi
-  dir="$(mktemp -d --tmpdir=/tmp pi-probe.XXXXXX)" || return 1
+  dir="$(/usr/bin/mktemp -d --tmpdir=/tmp pi-probe.XXXXXX)" || return 1
   canonical_dir="$(/usr/bin/readlink -f "$dir")" || canonical_dir=""
   canonical_root="$(/usr/bin/readlink -f "$PI_REVIEW_ROOT")" || canonical_root=""
   if [ -z "$canonical_dir" ] || [ -z "$canonical_root" ]; then

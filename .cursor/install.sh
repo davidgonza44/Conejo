@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # Setup idempotente del entorno de desarrollo para Cloud Agents.
 # - Instala MySQL 8 y utilidades de Python (paquetes del sistema).
 # - Crea el entorno virtual e instala dependencias.
@@ -17,7 +17,7 @@
 # No se instalan gentle-pi ni paquetes companion, ni se configura MCP/subagents.
 #
 # Uso aislado (sin MySQL ni semilla de la aplicación):
-#   bash .cursor/install.sh --cloud-tools-only
+#   /bin/bash .cursor/install.sh --cloud-tools-only
 set -euo pipefail
 
 # Node loader hooks must never reach pinned invocations: an ambient
@@ -25,7 +25,15 @@ set -euo pipefail
 # JavaScript into the trusted Node process before any CLI runs.
 unset NODE_OPTIONS NODE_PATH
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Builtin-only root: parameter expansion + cd + pwd -P. No external utility.
+# PATH is not sanitized here: this file is sourced by isolated contract tests.
+_cloud_tools_src="${BASH_SOURCE[0]}"
+case "$_cloud_tools_src" in
+  */*) ;;
+  *) _cloud_tools_src="./${_cloud_tools_src}" ;;
+esac
+ROOT="$(cd "${_cloud_tools_src%/*}/.." && pwd -P)"
+unset _cloud_tools_src
 cd "$ROOT"
 
 export DEBIAN_FRONTEND=noninteractive
@@ -58,6 +66,15 @@ NODE_SHA256_LINUX_ARM64="013b59cfd2819703a6f4a14ab891fc46fc2a4e3f5bcd92de3fb4929
 cloud_tools_fail() {
   echo "!! $*" >&2
   exit 1
+}
+
+# Execution-entry only. Sourced contract tests must keep the caller PATH
+# (CI toolcache, nvm, and similar). Do not append caller PATH.
+cloud_tools_bootstrap_execution_environment() {
+  PATH="/usr/local/cargo/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin"
+  export PATH
+  unset NODE_OPTIONS NODE_PATH
+  hash -r
 }
 
 cloud_tools_linux_arch() {
@@ -251,6 +268,24 @@ cloud_tools_pinned_nodejs_prefix_hardened() {
   return 0
 }
 
+# Single filesystem policy for verified Node staging and post-Pi npm install:
+# root:root, and no group/other-writable non-symlink entries. find/chown -P
+# so directory symlinks are not followed out of the prefix.
+cloud_tools_harden_pinned_nodejs_prefix() {
+  local prefix="$1"
+  if [ -z "$prefix" ] || [ ! -d "$prefix" ]; then
+    cloud_tools_fail "no hay un prefijo Node para endurecer (${prefix:-vacío})"
+  fi
+  if [ ! -x /usr/bin/chown ] || [ ! -x /usr/bin/find ] || [ ! -x /usr/bin/chmod ]; then
+    cloud_tools_fail "faltan chown/find/chmod absolutos para endurecer ${prefix}"
+  fi
+  sudo /usr/bin/chown -R -P root:root -- "$prefix"
+  sudo /usr/bin/find -P "$prefix" ! -type l -perm /022 -exec /usr/bin/chmod go-w {} +
+  if ! cloud_tools_pinned_nodejs_prefix_hardened "$prefix"; then
+    cloud_tools_fail "el prefijo Node no quedó root:root sin escritura group/other (${prefix})"
+  fi
+}
+
 # Prefix reuse gate. Authenticate paths before executing Node or npm-cli.js.
 # Does not consult PATH. Does not execute prefix/bin/npm (env-node shebang).
 cloud_tools_pinned_nodejs_prefix_ready() {
@@ -390,14 +425,7 @@ install_pinned_nodejs() {
     sudo mv "$extracted" "$staged"
     # Harden staging before the live swap: ubuntu-owned extract must not
     # become the published prefix. Symlink modes are left alone.
-    sudo chown -R root:root "$staged"
-    sudo find "$staged" ! -type l -perm /022 -exec chmod go-w {} +
-    if [ -n "$(sudo find "$staged" \( ! -user root -o ! -group root \) -print)" ]; then
-      cloud_tools_fail "El prefijo Node en staging no quedó root:root"
-    fi
-    if [ -n "$(sudo find "$staged" ! -type l -perm /022 -print)" ]; then
-      cloud_tools_fail "El prefijo Node en staging tiene escritura para group/others"
-    fi
+    cloud_tools_harden_pinned_nodejs_prefix "$staged"
     sudo rm -rf "$prefix"
     sudo mv "$staged" "$prefix"
   fi
@@ -413,10 +441,7 @@ install_pinned_nodejs() {
   if [ ! -x "${prefix}/bin/node" ] || [ ! -x "${prefix}/bin/npm" ]; then
     cloud_tools_fail "Pi requiere ${prefix}/bin/node y ${prefix}/bin/npm"
   fi
-  if ! cloud_tools_pinned_nodejs_prefix_hardened "$prefix"; then
-    cloud_tools_fail "el prefijo Node fijado no conservó root:root sin escritura group/other (${prefix})"
-  fi
-  if ! cloud_tools_pinned_nodejs_prefix_ready "$prefix"; then
+  if ! cloud_tools_pinned_nodejs_prefix_reusable "$prefix"; then
     cloud_tools_fail "el prefijo Node fijado no quedó listo (${prefix})"
   fi
   dest_resolved="$(cloud_tools_canonical "$dest_node")" || dest_resolved=""
@@ -519,7 +544,7 @@ cloud_tools_pi_mktemp_pack_dir() {
   if [ ! -d /tmp ] || [ ! -w /tmp ]; then
     cloud_tools_fail "/tmp no está disponible para artefactos temporales de Pi"
   fi
-  dir="$(mktemp -d --tmpdir=/tmp pi-pack.XXXXXX)" \
+  dir="$(/usr/bin/mktemp -d --tmpdir=/tmp pi-pack.XXXXXX)" \
     || cloud_tools_fail "no se pudo crear el directorio temporal de Pi en /tmp"
   canonical_dir="$(/usr/bin/readlink -f "$dir")" || canonical_dir=""
   if [ -z "$canonical_dir" ]; then
@@ -540,7 +565,7 @@ cloud_tools_pi_mktemp_probe_home() {
   if [ ! -d /tmp ] || [ ! -w /tmp ]; then
     return 1
   fi
-  dir="$(mktemp -d --tmpdir=/tmp pi-probe.XXXXXX)" || return 1
+  dir="$(/usr/bin/mktemp -d --tmpdir=/tmp pi-probe.XXXXXX)" || return 1
   canonical_dir="$(/usr/bin/readlink -f "$dir")" || canonical_dir=""
   if [ -z "$canonical_dir" ]; then
     rm -rf "$dir"
@@ -783,14 +808,11 @@ install_pinned_pi() {
   cloud_tools_pi_npm_pack "$prefix_node" "$npm_cli" "$PI_PACKAGE" "$PI_VERSION" "$pack_dir"
 
   cloud_tools_pi_install_verified_pack "$prefix_node" "$npm_cli" "$prefix" "$pack_dir" "$PI_NPM_INTEGRITY"
+  cloud_tools_harden_pinned_nodejs_prefix "$prefix"
+  if ! cloud_tools_pinned_nodejs_prefix_reusable "$prefix"; then
+    cloud_tools_fail "Tras instalar Pi, el prefijo Node fijado no quedó reusable (${prefix})"
+  fi
   cloud_tools_publish_pinned_pi "$prefix" "$prefix_pi" "$dest"
-
-  if ! cloud_tools_pinned_nodejs_prefix_ready "$prefix"; then
-    cloud_tools_fail "Tras instalar Pi, el prefijo Node fijado ya no está listo"
-  fi
-  if ! cloud_tools_pi_version_matches "$prefix_node" "${prefix}/${PI_CLI_RELPATH}" "$PI_VERSION"; then
-    cloud_tools_fail "Tras instalar Pi, el CLI fijado no reporta ${PI_VERSION}"
-  fi
 
   echo "==> Pi ${PI_PACKAGE}@${PI_VERSION} instalado desde tarball verificado en $(command -v pi)"
 }
@@ -884,6 +906,8 @@ install_application_runtime() {
 if [ "${BASH_SOURCE[0]}" != "$0" ]; then
   return 0
 fi
+
+cloud_tools_bootstrap_execution_environment
 
 if [ "${1:-}" = "--cloud-tools-only" ]; then
   install_cloud_agent_tools
