@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Isolated Phase-1 Pi contract checks for the four PR #9 Codex findings.
-# Uses mocks under mktemp. Does not install binaries or touch /usr/local.
+# Isolated Phase-1 Pi contract checks. Uses mocks under mktemp.
+# Does not install binaries, touch /usr/local, or run npm pack.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -145,7 +145,7 @@ finding2_empty_path() {
   if (
     PATH="/nonexistent-pi-phase1-$$"
     hash -r
-    cloud_tools_assert_pinned_pi_on_path "$prefix_pi"
+    cloud_tools_assert_pinned_pi_on_path "${tmpdir}/missing" "$prefix_pi"
   ); then
     record "empty PATH fails closed" "PASS" "FAIL"
   else
@@ -166,7 +166,7 @@ finding2_uncontrolled_binary() {
   if (
     PATH="$(dirname "$other"):/nonexistent"
     hash -r
-    cloud_tools_assert_pinned_pi_on_path "$prefix_pi"
+    cloud_tools_assert_pinned_pi_on_path "${tmpdir}/prefix" "$prefix_pi"
   ); then
     record "uncontrolled PATH pi fails closed" "PASS" "FAIL"
   else
@@ -187,7 +187,7 @@ finding2_temp_exec_daemon_first() {
   if (
     PATH="$(dirname "$daemon_pi"):$(dirname "$prefix_pi")"
     hash -r
-    cloud_tools_assert_pinned_pi_on_path "$prefix_pi"
+    cloud_tools_assert_pinned_pi_on_path "${tmpdir}/prefix" "$prefix_pi"
   ); then
     record "temp exec-daemon/pi first on PATH fails" "PASS" "FAIL"
   else
@@ -210,7 +210,7 @@ finding2_hidden_exec_daemon_symlink() {
   if (
     PATH="${cargo_bin}:/nonexistent"
     hash -r
-    cloud_tools_assert_pinned_pi_on_path "$prefix_pi"
+    cloud_tools_assert_pinned_pi_on_path "${tmpdir}/prefix" "$prefix_pi"
   ); then
     record "hidden exec-daemon symlink target rejected" "PASS" "FAIL"
   else
@@ -233,7 +233,7 @@ finding2_controlled_symlink_chain() {
   if (
     PATH="${cargo_bin}:/nonexistent"
     hash -r
-    cloud_tools_assert_pinned_pi_on_path "$prefix_pi"
+    cloud_tools_assert_pinned_pi_on_path "${tmpdir}/prefix" "$prefix_pi"
   ); then
     record "controlled cargo->dest->prefix chain accepted" "PASS" "PASS"
   else
@@ -253,7 +253,7 @@ finding2_dest_only_without_prefix() {
   if (
     PATH="$(dirname "$dest"):/nonexistent"
     hash -r
-    cloud_tools_assert_pinned_pi_on_path "$prefix_pi"
+    cloud_tools_assert_pinned_pi_on_path "${tmpdir}/prefix" "$prefix_pi"
   ); then
     record "dest-only reuse without prefix_pi fails" "PASS" "FAIL"
   else
@@ -431,6 +431,225 @@ EOF
   rm -rf "$tmpdir"
 }
 
+write_mock_pi() {
+  local dest="$1"
+  mkdir -p "$(dirname "$dest")"
+  printf '#!/bin/sh\nprintf "0.84.4\\n"\n' > "$dest"
+  chmod +x "$dest"
+}
+
+finding5_legitimate_npm_layout() {
+  local tmpdir prefix prefix_pi cli dest cargo_bin
+  tmpdir="$(mktemp -d)"
+  prefix="${tmpdir}/prefix"
+  prefix_pi="${prefix}/bin/pi"
+  cli="${prefix}/lib/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js"
+  dest="${tmpdir}/usr/local/bin/pi"
+  cargo_bin="${tmpdir}/cargo/bin"
+  mkdir -p "$(dirname "$cli")" "$(dirname "$prefix_pi")" "$(dirname "$dest")" "$cargo_bin"
+  write_mock_pi "$cli"
+  ln -sfn "$cli" "$prefix_pi"
+  ln -sfn "$prefix_pi" "$dest"
+  ln -sfn "$dest" "${cargo_bin}/pi"
+  if (
+    PATH="${cargo_bin}:/nonexistent"
+    hash -r
+    cloud_tools_assert_pinned_pi_on_path "$prefix" "$prefix_pi"
+  ); then
+    record "legitimate npm target beneath prefix accepted" "PASS" "PASS"
+  else
+    record "legitimate npm target beneath prefix accepted" "FAIL" "PASS"
+  fi
+  rm -rf "$tmpdir"
+}
+
+finding5_escaped_tmp_target() {
+  local tmpdir prefix prefix_pi outside dest cargo_bin
+  tmpdir="$(mktemp -d)"
+  prefix="${tmpdir}/prefix"
+  prefix_pi="${prefix}/bin/pi"
+  dest="${tmpdir}/usr/local/bin/pi"
+  cargo_bin="${tmpdir}/cargo/bin"
+  outside="$(mktemp -p /tmp pi-escape.XXXXXX)"
+  mkdir -p "$(dirname "$prefix_pi")" "$(dirname "$dest")" "$cargo_bin"
+  write_mock_pi "$outside"
+  ln -sfn "$outside" "$prefix_pi"
+  ln -sfn "$prefix_pi" "$dest"
+  ln -sfn "$dest" "${cargo_bin}/pi"
+  if (
+    PATH="${cargo_bin}:/nonexistent"
+    hash -r
+    cloud_tools_assert_pinned_pi_on_path "$prefix" "$prefix_pi"
+  ); then
+    record "escaped /tmp target rejected" "PASS" "FAIL"
+  else
+    record "escaped /tmp target rejected" "PASS" "PASS"
+  fi
+  rm -f "$outside"
+  rm -rf "$tmpdir"
+}
+
+finding5_escaped_exec_daemon_like() {
+  local tmpdir prefix prefix_pi daemon_pi dest cargo_bin
+  tmpdir="$(mktemp -d)"
+  prefix="${tmpdir}/prefix"
+  prefix_pi="${prefix}/bin/pi"
+  daemon_pi="${tmpdir}/exec-daemon/pi"
+  dest="${tmpdir}/usr/local/bin/pi"
+  cargo_bin="${tmpdir}/cargo/bin"
+  mkdir -p "$(dirname "$prefix_pi")" "$(dirname "$daemon_pi")" "$(dirname "$dest")" "$cargo_bin"
+  write_mock_pi "$daemon_pi"
+  ln -sfn "$daemon_pi" "$prefix_pi"
+  ln -sfn "$prefix_pi" "$dest"
+  ln -sfn "$dest" "${cargo_bin}/pi"
+  if (
+    PATH="${cargo_bin}:/nonexistent"
+    hash -r
+    cloud_tools_assert_pinned_pi_on_path "$prefix" "$prefix_pi"
+  ); then
+    record "escaped exec-daemon-like target rejected" "PASS" "FAIL"
+  else
+    record "escaped exec-daemon-like target rejected" "PASS" "PASS"
+  fi
+  rm -rf "$tmpdir"
+}
+
+finding5_prefix_lookalike() {
+  local tmpdir prefix prefix_pi lookalike dest cargo_bin
+  tmpdir="$(mktemp -d)"
+  prefix="${tmpdir}/trusted/prefix"
+  lookalike="${tmpdir}/trusted/prefix-evil/cli.js"
+  prefix_pi="${prefix}/bin/pi"
+  dest="${tmpdir}/usr/local/bin/pi"
+  cargo_bin="${tmpdir}/cargo/bin"
+  mkdir -p "$(dirname "$prefix_pi")" "$(dirname "$lookalike")" "$(dirname "$dest")" "$cargo_bin"
+  write_mock_pi "$lookalike"
+  ln -sfn "$lookalike" "$prefix_pi"
+  ln -sfn "$prefix_pi" "$dest"
+  ln -sfn "$dest" "${cargo_bin}/pi"
+  if (
+    PATH="${cargo_bin}:/nonexistent"
+    hash -r
+    cloud_tools_assert_pinned_pi_on_path "$prefix" "$prefix_pi"
+  ); then
+    record "prefix-lookalike sibling target rejected" "PASS" "FAIL"
+  else
+    record "prefix-lookalike sibling target rejected" "PASS" "PASS"
+  fi
+  rm -rf "$tmpdir"
+}
+
+finding5_path_and_prefix_agree_externally() {
+  local tmpdir prefix prefix_pi outside dest cargo_bin
+  tmpdir="$(mktemp -d)"
+  prefix="${tmpdir}/prefix"
+  prefix_pi="${prefix}/bin/pi"
+  dest="${tmpdir}/usr/local/bin/pi"
+  cargo_bin="${tmpdir}/cargo/bin"
+  outside="$(mktemp -p /tmp pi-agree.XXXXXX)"
+  mkdir -p "$(dirname "$prefix_pi")" "$(dirname "$dest")" "$cargo_bin"
+  write_mock_pi "$outside"
+  ln -sfn "$outside" "$prefix_pi"
+  ln -sfn "$prefix_pi" "$dest"
+  ln -sfn "$dest" "${cargo_bin}/pi"
+  if (
+    PATH="${cargo_bin}:/nonexistent"
+    hash -r
+    cloud_tools_assert_pinned_pi_on_path "$prefix" "$prefix_pi"
+  ); then
+    record "PATH and prefix_pi agreeing on external target rejected" "PASS" "FAIL"
+  else
+    record "PATH and prefix_pi agreeing on external target rejected" "PASS" "PASS"
+  fi
+  rm -f "$outside"
+  rm -rf "$tmpdir"
+}
+
+finding5_escaped_prefix_not_probed() {
+  local tmpdir prefix prefix_pi outside log
+  tmpdir="$(mktemp -d)"
+  prefix="${tmpdir}/prefix"
+  prefix_pi="${prefix}/bin/pi"
+  outside="$(mktemp -p /tmp pi-noprobe.XXXXXX)"
+  log="${tmpdir}/argv.log"
+  mkdir -p "$(dirname "$prefix_pi")"
+  cat > "$outside" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$log"
+printf '%s\n' "0.84.4"
+EOF
+  chmod +x "$outside"
+  ln -sfn "$outside" "$prefix_pi"
+  if (
+    cloud_tools_assert_pi_under_prefix "$prefix_pi" "$prefix"
+    cloud_tools_pi_version_matches "$prefix_pi" "0.84.4"
+  ); then
+    record "escaped prefix_pi is not version-probed" "PASS" "FAIL"
+  elif [ -s "$log" ]; then
+    record "escaped prefix_pi is not version-probed" "probed: $(cat "$log")" "empty"
+  else
+    record "escaped prefix_pi is not version-probed" "PASS" "PASS"
+  fi
+  rm -f "$outside"
+  rm -rf "$tmpdir"
+}
+
+list_repo_tgz() {
+  find "$ROOT" -name '*.tgz' -print | sort
+}
+
+finding6_pack_dir_ignores_hostile_tmpdir() {
+  local before after created
+  before="$(list_repo_tgz)"
+  created="$(TMPDIR="$ROOT" cloud_tools_pi_mktemp_pack_dir)"
+  after="$(list_repo_tgz)"
+  if [ -z "$created" ]; then
+    record "TMPDIR=ROOT cannot move pack dir into repo" "empty" "outside"
+  elif cloud_tools_repo_contains_path "$created"; then
+    record "TMPDIR=ROOT cannot move pack dir into repo" "$created" "outside"
+  elif [ "$before" != "$after" ]; then
+    record "TMPDIR=ROOT cannot move pack dir into repo" "new tgz" "unchanged"
+  else
+    record "TMPDIR=ROOT cannot move pack dir into repo" "PASS" "PASS"
+  fi
+  rm -rf "$created"
+
+  before="$(list_repo_tgz)"
+  created="$(TMPDIR="${ROOT}/.cursor" cloud_tools_pi_mktemp_pack_dir)"
+  after="$(list_repo_tgz)"
+  if [ -z "$created" ]; then
+    record "TMPDIR=ROOT/.cursor cannot move pack dir into repo" "empty" "outside"
+  elif cloud_tools_repo_contains_path "$created"; then
+    record "TMPDIR=ROOT/.cursor cannot move pack dir into repo" "$created" "outside"
+  elif [ "$before" != "$after" ]; then
+    record "TMPDIR=ROOT/.cursor cannot move pack dir into repo" "new tgz" "unchanged"
+  else
+    record "TMPDIR=ROOT/.cursor cannot move pack dir into repo" "PASS" "PASS"
+  fi
+  rm -rf "$created"
+}
+
+finding6_containment_guard() {
+  local before after
+  before="$(list_repo_tgz)"
+  if (cloud_tools_assert_outside_repo "$ROOT"); then
+    record "containment guard rejects repository ROOT" "PASS" "FAIL"
+  else
+    record "containment guard rejects repository ROOT" "PASS" "PASS"
+  fi
+  if (cloud_tools_assert_outside_repo "${ROOT}/.cursor"); then
+    record "containment guard rejects repository subdirectory" "PASS" "FAIL"
+  else
+    record "containment guard rejects repository subdirectory" "PASS" "PASS"
+  fi
+  after="$(list_repo_tgz)"
+  if [ "$before" = "$after" ]; then
+    record "containment tests created no new repository tarball" "PASS" "PASS"
+  else
+    record "containment tests created no new repository tarball" "changed" "unchanged"
+  fi
+}
+
 finding4_install_accepts_local_tgz() {
   local tmpdir npm_bin prefix log tgz
   tmpdir="$(mktemp -d)"
@@ -478,6 +697,14 @@ finding4_known_sri
 finding4_sri_mismatch
 finding4_install_rejects_registry_specs
 finding4_install_accepts_local_tgz
+finding5_legitimate_npm_layout
+finding5_escaped_tmp_target
+finding5_escaped_exec_daemon_like
+finding5_prefix_lookalike
+finding5_path_and_prefix_agree_externally
+finding5_escaped_prefix_not_probed
+finding6_pack_dir_ignores_hostile_tmpdir
+finding6_containment_guard
 
 echo "pi phase1 contract: ${pass} passed, ${fail} failed"
 [ "$fail" -eq 0 ]

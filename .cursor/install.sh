@@ -310,6 +310,87 @@ cloud_tools_link_cloud_bin() {
   fi
 }
 
+# Path-component-safe containment. Both arguments must already be canonical
+# and without a trailing slash. /trusted/prefix-evil is not under /trusted/prefix.
+cloud_tools_path_is_beneath() {
+  local child="$1"
+  local parent="$2"
+  child="${child%/}"
+  parent="${parent%/}"
+  [ -n "$child" ] && [ -n "$parent" ] || return 1
+  case "$child" in
+    "${parent}"/*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+cloud_tools_repo_contains_path() {
+  local path="$1"
+  local canonical_path canonical_root
+  if [ ! -x /usr/bin/readlink ]; then
+    return 0
+  fi
+  canonical_path="$(/usr/bin/readlink -f "$path")" || canonical_path=""
+  canonical_root="$(/usr/bin/readlink -f "$ROOT")" || canonical_root=""
+  [ -n "$canonical_path" ] && [ -n "$canonical_root" ] || return 0
+  canonical_path="${canonical_path%/}"
+  canonical_root="${canonical_root%/}"
+  [ "$canonical_path" = "$canonical_root" ] || cloud_tools_path_is_beneath "$canonical_path" "$canonical_root"
+}
+
+cloud_tools_assert_outside_repo() {
+  local path="$1"
+  if cloud_tools_repo_contains_path "$path"; then
+    cloud_tools_fail "el directorio temporal de Pi quedó dentro del repositorio (${path})"
+  fi
+}
+
+cloud_tools_assert_pi_under_prefix() {
+  local path="$1"
+  local prefix="$2"
+  local canonical_path canonical_prefix
+  if [ ! -x /usr/bin/readlink ]; then
+    cloud_tools_fail "readlink no está disponible para resolver pi"
+  fi
+  canonical_prefix="$(/usr/bin/readlink -f "$prefix")" || canonical_prefix=""
+  canonical_path="$(/usr/bin/readlink -f "$path")" || canonical_path=""
+  if [ -z "$canonical_prefix" ] || [ ! -d "$canonical_prefix" ]; then
+    cloud_tools_fail "el prefijo Node fijado no es un directorio (${prefix})"
+  fi
+  if [ -z "$canonical_path" ]; then
+    cloud_tools_fail "no se pudo resolver el destino de pi (${path})"
+  fi
+  canonical_prefix="${canonical_prefix%/}"
+  canonical_path="${canonical_path%/}"
+  case "$canonical_path" in
+    /exec-daemon/*)
+      cloud_tools_fail "pi resuelve a ${canonical_path}"
+      ;;
+  esac
+  if ! cloud_tools_path_is_beneath "$canonical_path" "$canonical_prefix"; then
+    cloud_tools_fail "pi (${path} -> ${canonical_path}) no está bajo el prefijo fijado (${canonical_prefix})"
+  fi
+}
+
+cloud_tools_pi_mktemp_pack_dir() {
+  local dir canonical_dir
+  if [ ! -d /tmp ] || [ ! -w /tmp ]; then
+    cloud_tools_fail "/tmp no está disponible para artefactos temporales de Pi"
+  fi
+  dir="$(mktemp -d --tmpdir=/tmp pi-pack.XXXXXX)" \
+    || cloud_tools_fail "no se pudo crear el directorio temporal de Pi en /tmp"
+  canonical_dir="$(/usr/bin/readlink -f "$dir")" || canonical_dir=""
+  if [ -z "$canonical_dir" ]; then
+    rm -rf "$dir"
+    cloud_tools_fail "no se pudo canonicalizar el directorio temporal de Pi"
+  fi
+  if cloud_tools_repo_contains_path "$canonical_dir"; then
+    rm -rf "$dir"
+    cloud_tools_fail "el directorio temporal de Pi quedó dentro del repositorio (${canonical_dir})"
+  fi
+  printf '%s' "$canonical_dir"
+}
+
 # Pi-only version probe. Never runs `pi version` (prompt-capable). Isolates HOME
 # in a subshell so a RETURN trap cannot clobber the caller's pack-dir cleanup.
 cloud_tools_pi_version_matches() {
@@ -330,7 +411,8 @@ cloud_tools_pi_version_matches() {
 }
 
 cloud_tools_assert_pinned_pi_on_path() {
-  local prefix_pi="$1"
+  local prefix="$1"
+  local prefix_pi="$2"
   local pi_path resolved expected
   hash -r
   pi_path="$(command -v pi || true)"
@@ -362,12 +444,15 @@ cloud_tools_assert_pinned_pi_on_path() {
   if [ "$resolved" != "$expected" ]; then
     cloud_tools_fail "pi en PATH (${pi_path} -> ${resolved}) no es el binario del prefijo fijado (${expected})"
   fi
+  cloud_tools_assert_pi_under_prefix "$prefix_pi" "$prefix"
+  cloud_tools_assert_pi_under_prefix "$pi_path" "$prefix"
 }
 
 cloud_tools_assert_ready_pi() {
-  local prefix_pi="$1"
+  local prefix="$1"
+  local prefix_pi="$2"
   local pi_path
-  cloud_tools_assert_pinned_pi_on_path "$prefix_pi"
+  cloud_tools_assert_pinned_pi_on_path "$prefix" "$prefix_pi"
   pi_path="$(command -v pi || true)"
   if ! cloud_tools_pi_version_matches "$pi_path" "$PI_VERSION"; then
     cloud_tools_fail "pi en PATH no reporta ${PI_VERSION} con --version"
@@ -419,8 +504,9 @@ cloud_tools_pi_install_verified_tarball() {
 }
 
 cloud_tools_publish_pinned_pi() {
-  local prefix_pi="$1"
-  local dest="$2"
+  local prefix="$1"
+  local prefix_pi="$2"
+  local dest="$3"
   if [ ! -x "$prefix_pi" ]; then
     cloud_tools_fail "npm install no dejó el binario pi en ${prefix_pi}"
   fi
@@ -429,7 +515,7 @@ cloud_tools_publish_pinned_pi() {
   if [ -d /usr/local/cargo/bin ] && [ ! -e /usr/local/cargo/bin/pi ]; then
     cloud_tools_fail "no se publicó pi en /usr/local/cargo/bin"
   fi
-  cloud_tools_assert_ready_pi "$prefix_pi"
+  cloud_tools_assert_ready_pi "$prefix" "$prefix_pi"
 }
 
 install_pinned_pi() {
@@ -475,15 +561,18 @@ install_pinned_pi() {
     cloud_tools_fail "No se encontró el node fijado en ${prefix_node}"
   fi
 
-  if [ -x "$prefix_pi" ] && cloud_tools_pi_version_matches "$prefix_pi" "$PI_VERSION"; then
-    cloud_tools_publish_pinned_pi "$prefix_pi" "$dest"
-    echo "==> Pi ${PI_VERSION} ya está instalado; se reutiliza ($(command -v pi))."
-    return 0
+  if [ -x "$prefix_pi" ]; then
+    cloud_tools_assert_pi_under_prefix "$prefix_pi" "$prefix"
+    if cloud_tools_pi_version_matches "$prefix_pi" "$PI_VERSION"; then
+      cloud_tools_publish_pinned_pi "$prefix" "$prefix_pi" "$dest"
+      echo "==> Pi ${PI_VERSION} ya está instalado; se reutiliza ($(command -v pi))."
+      return 0
+    fi
   fi
 
   echo "==> Empaquetando ${PI_PACKAGE}@${PI_VERSION} y verificando SRI del tarball"
   local pack_dir tgz candidate sri
-  pack_dir="$(mktemp -d)"
+  pack_dir="$(cloud_tools_pi_mktemp_pack_dir)"
   # EXIT covers cloud_tools_fail; RETURN covers a successful return.
   # shellcheck disable=SC2064
   trap "rm -rf '$pack_dir'" RETURN EXIT
@@ -515,7 +604,7 @@ install_pinned_pi() {
   echo "==> SRI del tarball verificado: ${sri}"
 
   cloud_tools_pi_install_verified_tarball "$npm_bin" "$prefix" "$tgz"
-  cloud_tools_publish_pinned_pi "$prefix_pi" "$dest"
+  cloud_tools_publish_pinned_pi "$prefix" "$prefix_pi" "$dest"
 
   local verify_node verify_npm
   verify_node="$(node --version 2>/dev/null || true)"
