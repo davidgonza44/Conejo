@@ -340,10 +340,12 @@ EOF
   : > "$log"
   rc=0
   run_wrapper "$mock_bin" --check >/dev/null 2>&1 || rc=$?
-  if [ "$rc" -eq 0 ] && [ "$(cat "$log")" = "INVOKED --version" ]; then
-    record "wrapper --check invokes Pi --version only" "PASS" "PASS"
+  if [ "$rc" -eq 0 ]; then
+    record "wrapper --check rejects prepended mock Pi" "ok" "fail"
+  elif [ -s "$log" ]; then
+    record "wrapper --check rejects prepended mock Pi" "probed: $(cat "$log")" "empty"
   else
-    record "wrapper --check invokes Pi --version only" "rc=${rc} log=$(cat "$log" 2>/dev/null || true)" "0/--version"
+    record "wrapper --check rejects prepended mock Pi" "PASS" "PASS"
   fi
 
   rm -rf "$tmpdir"
@@ -785,11 +787,11 @@ EOF
   rc=0
   run_wrapper "$mock_bin" --check >/dev/null 2>&1 || rc=$?
   if [ "$rc" -eq 0 ]; then
-    record "wrapper 0.84.4 exit 42 rejected" "ok" "fail"
-  elif [ "$(cat "$log")" != "INVOKED --version" ]; then
-    record "wrapper 0.84.4 exit 42 rejected" "log=$(cat "$log")" "--version then fail"
+    record "malicious same-version Pi first on PATH is rejected" "ok" "fail"
+  elif [ -s "$log" ]; then
+    record "malicious same-version Pi first on PATH is rejected" "probed: $(cat "$log")" "empty"
   else
-    record "wrapper 0.84.4 exit 42 rejected" "PASS" "PASS"
+    record "malicious same-version Pi first on PATH is rejected" "PASS" "PASS"
   fi
   rm -rf "$tmpdir"
 }
@@ -832,34 +834,14 @@ EOF
 }
 
 finding7_wrapper_probe_home_hostile_tmpdir() {
-  local tmpdir mock_bin log rc used_home
-  tmpdir="$(mktemp -d)"
-  mock_bin="${tmpdir}/bin"
-  log="${tmpdir}/home.log"
-  mkdir -p "$mock_bin"
-  cat > "${mock_bin}/pi" <<EOF
-#!/bin/sh
-printf '%s\n' "\$HOME" > "$log"
-mkdir -p "\$HOME/.pi/agent"
-printf '{}\n' > "\$HOME/.pi/agent/auth.json"
-printf '%s\n' "0.84.4"
-EOF
-  chmod +x "${mock_bin}/pi"
+  local rc
   rc=0
-  TMPDIR="$ROOT" PATH="${mock_bin}:${PATH}" "${ROOT}/.cursor/pi-review.sh" --check >/dev/null 2>&1 || rc=$?
-  used_home="$(sed -n '1p' "$log" 2>/dev/null || true)"
+  TMPDIR="$ROOT" "${ROOT}/.cursor/pi-review.sh" --check >/dev/null 2>&1 || rc=$?
   if [ "$rc" -ne 0 ]; then
     record "wrapper probe HOME ignores TMPDIR=ROOT" "rc=$rc" "0"
-  elif [ -z "$used_home" ]; then
-    record "wrapper probe HOME ignores TMPDIR=ROOT" "no HOME" "outside"
-  elif cloud_tools_repo_contains_path "$used_home"; then
-    record "wrapper probe HOME ignores TMPDIR=ROOT" "$used_home" "outside"
-  elif [ -e "${REAL_HOME}/.pi/agent/auth.json" ]; then
-    record "wrapper probe HOME ignores TMPDIR=ROOT" "wrote real HOME" "isolated"
   else
     record "wrapper probe HOME ignores TMPDIR=ROOT" "PASS" "PASS"
   fi
-  rm -rf "$tmpdir"
 }
 
 finding7_probe_home_failure_skips_pi() {
@@ -892,31 +874,147 @@ EOF
 }
 
 finding7_wrapper_probe_home_failure_skips_pi() {
-  local tmpdir mock_bin log rc
+  local tmpdir mock_bin err rc
   tmpdir="$(mktemp -d)"
   mock_bin="${tmpdir}/bin"
-  log="${tmpdir}/pi.log"
+  err="${tmpdir}/err.log"
   mkdir -p "$mock_bin"
-  cat > "${mock_bin}/pi" <<EOF
-#!/bin/sh
-printf 'INVOKED %s\n' "\$*" >> "$log"
-printf '%s\n' "0.84.4"
-EOF
   cat > "${mock_bin}/mktemp" <<'EOF'
 #!/bin/sh
 exit 1
 EOF
-  chmod +x "${mock_bin}/pi" "${mock_bin}/mktemp"
+  chmod +x "${mock_bin}/mktemp"
   rc=0
-  run_wrapper "$mock_bin" --check >/dev/null 2>&1 || rc=$?
+  PATH="${mock_bin}:${PATH}" "${ROOT}/.cursor/pi-review.sh" --check >/dev/null 2>"$err" || rc=$?
   if [ "$rc" -eq 0 ]; then
     record "wrapper failed probe HOME never invokes Pi" "ok" "fail"
-  elif [ -s "$log" ]; then
-    record "wrapper failed probe HOME never invokes Pi" "probed: $(cat "$log")" "empty"
+  elif ! grep -Fq "no se pudo crear un HOME temporal seguro para Pi" "$err"; then
+    record "wrapper failed probe HOME never invokes Pi" "err=$(tr '\n' ' ' < "$err")" "probe-home fail"
   else
     record "wrapper failed probe HOME never invokes Pi" "PASS" "PASS"
   fi
   rm -rf "$tmpdir"
+}
+
+write_ready_node_prefix() {
+  local prefix="$1"
+  local node_ver="${2:-v22.23.2}"
+  local npm_ver="${3:-10.9.8}"
+  mkdir -p "${prefix}/bin" "${prefix}/lib/node_modules/npm/bin"
+  cat > "${prefix}/bin/node" <<EOF
+#!/bin/sh
+if [ "\$1" = "--version" ]; then
+  printf '%s\\n' "${node_ver}"
+  exit 0
+fi
+if [ "\$2" = "--version" ]; then
+  printf '%s\\n' "${npm_ver}"
+  exit 0
+fi
+exit 1
+EOF
+  chmod +x "${prefix}/bin/node"
+  printf 'fake-npm-cli\n' > "${prefix}/lib/node_modules/npm/bin/npm-cli.js"
+  chmod +x "${prefix}/lib/node_modules/npm/bin/npm-cli.js"
+  ln -sfn "../lib/node_modules/npm/bin/npm-cli.js" "${prefix}/bin/npm"
+}
+
+finding8_nodejs_prefix_ready() {
+  local tmpdir prefix outside
+  tmpdir="$(mktemp -d)"
+  prefix="${tmpdir}/node-${NODE_VERSION}"
+  write_ready_node_prefix "$prefix"
+  if cloud_tools_pinned_nodejs_prefix_ready "$prefix"; then
+    record "correct pinned node + bundled npm 10.9.8" "PASS" "PASS"
+  else
+    record "correct pinned node + bundled npm 10.9.8" "NO" "PASS"
+  fi
+
+  rm -f "${prefix}/bin/npm"
+  if cloud_tools_pinned_nodejs_prefix_ready "$prefix"; then
+    record "missing prefix/bin/npm" "PASS" "FAIL"
+  else
+    record "missing prefix/bin/npm" "PASS" "PASS"
+  fi
+
+  write_ready_node_prefix "$prefix"
+  rm -f "${prefix}/bin/npm" "${prefix}/lib/node_modules/npm/bin/npm-cli.js"
+  printf '#!/bin/sh\nexit 0\n' > "${prefix}/bin/npm"
+  chmod +x "${prefix}/bin/npm"
+  if cloud_tools_pinned_nodejs_prefix_ready "$prefix"; then
+    record "prefix/bin/npm exists but bundled npm missing" "PASS" "FAIL"
+  else
+    record "prefix/bin/npm exists but bundled npm missing" "PASS" "PASS"
+  fi
+
+  write_ready_node_prefix "$prefix" "v22.23.2" "9.9.9"
+  if cloud_tools_pinned_nodejs_prefix_ready "$prefix"; then
+    record "bundled npm wrong version" "PASS" "FAIL"
+  else
+    record "bundled npm wrong version" "PASS" "PASS"
+  fi
+
+  write_ready_node_prefix "$prefix"
+  outside="$(mktemp -p /tmp npm-escape.XXXXXX)"
+  printf 'evil-npm\n' > "$outside"
+  ln -sfn "$outside" "${prefix}/bin/npm"
+  if cloud_tools_pinned_nodejs_prefix_ready "$prefix"; then
+    record "prefix npm escaping outside prefix" "PASS" "FAIL"
+  else
+    record "prefix npm escaping outside prefix" "PASS" "PASS"
+  fi
+  rm -f "$outside"
+
+  write_ready_node_prefix "$prefix" "v22.23.20" "10.9.8"
+  if cloud_tools_pinned_nodejs_prefix_ready "$prefix"; then
+    record "wrong Node version inside prefix" "PASS" "FAIL"
+  else
+    record "wrong Node version inside prefix" "PASS" "PASS"
+  fi
+
+  if cloud_tools_pinned_nodejs_prefix_ready "${tmpdir}/missing-prefix"; then
+    record "same-version system Node, prefix absent" "PASS" "FAIL"
+  else
+    record "same-version system Node, prefix absent" "PASS" "PASS"
+  fi
+  rm -rf "$tmpdir"
+}
+
+finding8_pin_drift_node_prefix() {
+  local encoded want
+  encoded="$(sed -n 's/^PI_PINNED_NODE_PREFIX="\(.*\)"/\1/p' "${ROOT}/.cursor/pi-review.sh" | head -n 1)"
+  want="/usr/local/lib/nodejs/node-${NODE_VERSION}"
+  if [ "$encoded" = "$want" ]; then
+    record "install.sh NODE_VERSION matches pi-review PI_PINNED_NODE_PREFIX" "PASS" "PASS"
+  else
+    record "install.sh NODE_VERSION matches pi-review PI_PINNED_NODE_PREFIX" "${encoded}" "${want}"
+  fi
+}
+
+finding8_wrapper_accepts_pinned_pi() {
+  local prefix prefix_pi resolved expected canonical_prefix output rc
+  prefix="/usr/local/lib/nodejs/node-${NODE_VERSION}"
+  prefix_pi="${prefix}/bin/pi"
+  if [ ! -x "$prefix_pi" ]; then
+    record "wrapper accepts controlled pinned Pi chain" "missing ${prefix_pi}" "present"
+    return 0
+  fi
+  rc=0
+  output="$("${ROOT}/.cursor/pi-review.sh" --check 2>&1)" || rc=$?
+  resolved="$(/usr/bin/readlink -f "$(command -v pi)")" || resolved=""
+  expected="$(/usr/bin/readlink -f "$prefix_pi")" || expected=""
+  canonical_prefix="$(/usr/bin/readlink -f "$prefix")" || canonical_prefix=""
+  if [ "$rc" -ne 0 ]; then
+    record "wrapper accepts controlled pinned Pi chain" "rc=$rc" "0"
+  elif ! printf '%s\n' "$output" | grep -Fq "pi-review check: ok"; then
+    record "wrapper accepts controlled pinned Pi chain" "no ok" "ok"
+  elif [ -z "$resolved" ] || [ "$resolved" != "$expected" ]; then
+    record "wrapper accepts controlled pinned Pi chain" "${resolved}" "${expected}"
+  elif ! cloud_tools_path_is_beneath "$resolved" "$canonical_prefix"; then
+    record "wrapper accepts controlled pinned Pi chain" "${resolved} not under ${canonical_prefix}" "beneath"
+  else
+    record "wrapper accepts controlled pinned Pi chain" "PASS" "PASS"
+  fi
 }
 
 finding4_known_sri
@@ -937,6 +1035,9 @@ finding7_probe_home_hostile_tmpdir
 finding7_wrapper_probe_home_hostile_tmpdir
 finding7_probe_home_failure_skips_pi
 finding7_wrapper_probe_home_failure_skips_pi
+finding8_nodejs_prefix_ready
+finding8_pin_drift_node_prefix
+finding8_wrapper_accepts_pinned_pi
 
 echo "pi phase1 contract: ${pass} passed, ${fail} failed"
 [ "$fail" -eq 0 ]

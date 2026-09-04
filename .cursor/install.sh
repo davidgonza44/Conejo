@@ -195,15 +195,44 @@ cloud_tools_install_release_binary() {
   echo "==> ${name} ${tag} instalado en ${dest}"
 }
 
+# Prefix reuse gate for the official Node layout. npm is validated by the
+# pinned Node executing the bundled npm-cli.js, not by PATH or #!/usr/bin/env.
+cloud_tools_pinned_nodejs_prefix_ready() {
+  local prefix="$1"
+  local prefix_node="${prefix}/bin/node"
+  local prefix_npm="${prefix}/bin/npm"
+  local npm_cli="${prefix}/lib/node_modules/npm/bin/npm-cli.js"
+  local node_ver npm_ver canonical_prefix canonical_npm canonical_cli
+  [ -x "$prefix_node" ] || return 1
+  [ -x "$prefix_npm" ] || return 1
+  [ -f "$npm_cli" ] || return 1
+  node_ver="$("$prefix_node" --version 2>/dev/null || true)"
+  [ "$node_ver" = "$NODE_VERSION" ] || return 1
+  if [ ! -x /usr/bin/readlink ]; then
+    return 1
+  fi
+  canonical_prefix="$(/usr/bin/readlink -f "$prefix")" || canonical_prefix=""
+  canonical_npm="$(/usr/bin/readlink -f "$prefix_npm")" || canonical_npm=""
+  canonical_cli="$(/usr/bin/readlink -f "$npm_cli")" || canonical_cli=""
+  [ -n "$canonical_prefix" ] && [ -n "$canonical_npm" ] && [ -n "$canonical_cli" ] || return 1
+  canonical_prefix="${canonical_prefix%/}"
+  canonical_npm="${canonical_npm%/}"
+  canonical_cli="${canonical_cli%/}"
+  [ "$canonical_npm" = "$canonical_cli" ] || return 1
+  cloud_tools_path_is_beneath "$canonical_npm" "$canonical_prefix" || return 1
+  npm_ver="$("$prefix_node" "$npm_cli" --version 2>/dev/null || true)"
+  [ "$npm_ver" = "10.9.8" ] || return 1
+  return 0
+}
+
 install_pinned_nodejs() {
   echo "==> Instalando Node.js ${NODE_VERSION} (oficial, >=22.16 para CodeGraph)"
 
   local dest_node="${CLOUD_TOOLS_BIN_DIR}/node"
   local dest_npm="${CLOUD_TOOLS_BIN_DIR}/npm"
-  if cloud_tools_version_matches "$dest_node" "${NODE_VERSION#v}" \
-    && [ -x "$dest_npm" ] \
-    && "$dest_npm" --version >/dev/null 2>&1; then
-    echo "==> Node.js ${NODE_VERSION} ya está instalado en ${dest_node}; se reutiliza."
+  local prefix="/usr/local/lib/nodejs/node-${NODE_VERSION}"
+  if cloud_tools_pinned_nodejs_prefix_ready "$prefix"; then
+    echo "==> Node.js ${NODE_VERSION} ya está en el prefijo fijado (${prefix}); se reutiliza."
   else
     local arch node_arch expected_sha
     arch="$(cloud_tools_linux_arch)"
@@ -253,7 +282,6 @@ install_pinned_nodejs() {
 
     # npm/npx del tarball oficial son wrappers relativos a lib/node_modules.
     # Hay que conservar el prefijo completo, no copiar solo bin/.
-    local prefix="/usr/local/lib/nodejs/node-${NODE_VERSION}"
     local staged="${prefix}.tmp"
     sudo rm -rf "$staged"
     sudo mkdir -p /usr/local/lib/nodejs
@@ -270,19 +298,26 @@ install_pinned_nodejs() {
     fi
     sudo rm -rf "$prefix"
     sudo mv "$staged" "$prefix"
-
-    local name
-    for name in node npm npx corepack; do
-      if [ -e "${prefix}/bin/${name}" ]; then
-        sudo ln -sfn "${prefix}/bin/${name}" "${CLOUD_TOOLS_BIN_DIR}/${name}"
-      fi
-    done
-
-    if ! cloud_tools_version_matches "$dest_node" "${NODE_VERSION#v}"; then
-      cloud_tools_fail "node quedó en ${dest_node} pero no reporta ${NODE_VERSION}"
-    fi
-    echo "==> Node.js ${NODE_VERSION} instalado en ${dest_node} (prefijo ${prefix})"
   fi
+
+  # CASE A/B: republish dest links from the pinned prefix (idempotent).
+  local name
+  for name in node npm npx corepack; do
+    if [ -e "${prefix}/bin/${name}" ]; then
+      sudo ln -sfn "${prefix}/bin/${name}" "${CLOUD_TOOLS_BIN_DIR}/${name}"
+    fi
+  done
+
+  if [ ! -x "${prefix}/bin/node" ] || [ ! -x "${prefix}/bin/npm" ]; then
+    cloud_tools_fail "Pi requiere ${prefix}/bin/node y ${prefix}/bin/npm"
+  fi
+  if ! cloud_tools_pinned_nodejs_prefix_ready "$prefix"; then
+    cloud_tools_fail "el prefijo Node fijado no quedó listo (${prefix})"
+  fi
+  if ! cloud_tools_version_matches "$dest_node" "${NODE_VERSION#v}"; then
+    cloud_tools_fail "node quedó en ${dest_node} pero no reporta ${NODE_VERSION}"
+  fi
+  echo "==> Node.js ${NODE_VERSION} listo en ${dest_node} (prefijo ${prefix})"
 
   # Cursor Cloud coloca /exec-daemon delante de /usr/local/bin. Si cargo/bin
   # existe y va primero en PATH, enlazar ahí evita que Node 22.14 del overlay

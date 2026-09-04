@@ -12,6 +12,10 @@ PI_EXPECTED_VERSION="0.84.4"
 PI_READONLY_TOOLS="read,grep,find,ls"
 PI_FORBIDDEN_TOOLS="bash,write,edit"
 PI_REVIEW_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Hardcoded trust root. Must stay equal to install.sh NODE_VERSION.
+# Do not override from the environment.
+PI_PINNED_NODE_PREFIX="/usr/local/lib/nodejs/node-v22.23.2"
+PI_PINNED_BIN="${PI_PINNED_NODE_PREFIX}/bin/pi"
 
 pi_review_fail() {
   echo "!! $*" >&2
@@ -28,6 +32,51 @@ pi_review_path_is_beneath() {
     "${parent}"/*) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+# Trust PATH pi only when it canonicalizes to the pinned prefix entry.
+# Must run before any Pi execution, including --version.
+pi_review_assert_pinned_pi() {
+  local pi_path="$1"
+  local resolved expected canonical_prefix
+  if [ -z "$pi_path" ]; then
+    pi_review_fail "pi no está en PATH"
+  fi
+  if [ "$pi_path" = "/exec-daemon/pi" ]; then
+    pi_review_fail "pi resolvió a /exec-daemon/pi; use el binario fijado del Cloud Build"
+  fi
+  if [ ! -x "$pi_path" ]; then
+    pi_review_fail "pi en ${pi_path} no es ejecutable"
+  fi
+  if [ ! -d "$PI_PINNED_NODE_PREFIX" ]; then
+    pi_review_fail "falta el prefijo Node fijado (${PI_PINNED_NODE_PREFIX})"
+  fi
+  if [ ! -x "$PI_PINNED_BIN" ]; then
+    pi_review_fail "falta pi en el prefijo Node fijado (${PI_PINNED_BIN})"
+  fi
+  if [ ! -x /usr/bin/readlink ]; then
+    pi_review_fail "readlink no está disponible para resolver pi"
+  fi
+  resolved="$(/usr/bin/readlink -f "$pi_path")" || resolved=""
+  expected="$(/usr/bin/readlink -f "$PI_PINNED_BIN")" || expected=""
+  canonical_prefix="$(/usr/bin/readlink -f "$PI_PINNED_NODE_PREFIX")" || canonical_prefix=""
+  if [ -z "$resolved" ] || [ -z "$expected" ] || [ -z "$canonical_prefix" ]; then
+    pi_review_fail "no se pudo resolver el destino de pi (${pi_path} / ${PI_PINNED_BIN})"
+  fi
+  resolved="${resolved%/}"
+  expected="${expected%/}"
+  canonical_prefix="${canonical_prefix%/}"
+  case "$resolved" in
+    /exec-daemon/*)
+      pi_review_fail "pi resuelve a ${resolved}"
+      ;;
+  esac
+  if [ "$resolved" != "$expected" ]; then
+    pi_review_fail "pi en PATH (${pi_path} -> ${resolved}) no es el binario del prefijo fijado (${expected})"
+  fi
+  if ! pi_review_path_is_beneath "$resolved" "$canonical_prefix"; then
+    pi_review_fail "pi (${pi_path} -> ${resolved}) no está bajo el prefijo fijado (${canonical_prefix})"
+  fi
 }
 
 pi_review_mktemp_home() {
@@ -93,15 +142,7 @@ fi
 
 hash -r
 pi_path="$(command -v pi || true)"
-if [ -z "$pi_path" ]; then
-  pi_review_fail "pi no está en PATH"
-fi
-if [ "$pi_path" = "/exec-daemon/pi" ]; then
-  pi_review_fail "pi resolvió a /exec-daemon/pi; use el binario fijado del Cloud Build"
-fi
-if [ ! -x "$pi_path" ]; then
-  pi_review_fail "pi en ${pi_path} no es ejecutable"
-fi
+pi_review_assert_pinned_pi "$pi_path"
 
 # Aislar HOME: `pi --version` escribiría ~/.pi/agent/auth.json en el home real.
 check_home=""

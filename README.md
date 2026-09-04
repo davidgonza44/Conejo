@@ -154,13 +154,19 @@ Engram queda en modo local. No se configuran `ENGRAM_CLOUD_*`, autosync ni memor
 
 Pi en Fase 1 es solo infraestructura de instalación y un wrapper read-only. La verificación no requiere autenticación ni realiza llamadas LLM. La autenticación y cualquier revisión con modelo se evaluarán aparte. Pi no está integrado con Gentle AI: no se instalan `gentle-pi` ni companions, no se configura MCP/subagents y no se ejecuta `gentle-ai install --agent pi`. El único punto de entrada aprobado es `.cursor/pi-review.sh`; en esta fase use `--check`.
 
-Rollback de Pi (no se ejecuta automáticamente):
+Rollback de Pi (no se ejecuta automáticamente; solo al revertir esta instalación Cloud). Use el Node y el npm-cli.js del prefijo fijado; no dependa de `#!/usr/bin/env node` ni del `npm` de PATH:
 
 ```powershell
-sudo npm uninstall -g @earendil-works/pi-coding-agent
+sudo /usr/local/lib/nodejs/node-v22.23.2/bin/node `
+  /usr/local/lib/nodejs/node-v22.23.2/lib/node_modules/npm/bin/npm-cli.js `
+  uninstall -g `
+  --prefix /usr/local/lib/nodejs/node-v22.23.2 `
+  @earendil-works/pi-coding-agent
+sudo rm -f /usr/local/bin/pi
+sudo rm -f /usr/local/cargo/bin/pi
 ```
 
-Si el Build creó un enlace controlado en `/usr/local/cargo/bin/pi`, quítelo. Elimine `~/.pi` solo si existe y es seguro borrarlo. Revierta los cambios de Fase 1 del repositorio y reconstruya el entorno Cloud.
+Esos dos enlaces los creó a mano el instalador Cloud (`ln -sfn`) y `npm uninstall` no garantiza quitarlos. Elimine `~/.pi` solo si existe y es seguro borrarlo. Revierta los cambios de Fase 1 del repositorio y reconstruya el entorno Cloud.
 
 ### Gentle AI, Ponytail y RTK
 
