@@ -1,7 +1,7 @@
 {
   "name": "Ferretería El Conejo — Inventario (Flask + MySQL)",
   "user": "ubuntu",
-  "install": "bash .cursor/install.sh",
+  "install": "/bin/bash .cursor/install.sh",
   "start": "bash .cursor/start.sh",
   "terminals": [
     {

@@ -41,6 +41,10 @@ run_case "Engram 1.20.0 expected 1.20.0" "Engram 1.20.0" "1.20.0" "MATCH"
 run_case "Engram 1.20.0-rc.1 expected 1.20.0" "Engram 1.20.0-rc.1" "1.20.0" "NO MATCH"
 run_case "Gentle AI 2.5.0 expected 2.5.0" "Gentle AI 2.5.0" "2.5.0" "MATCH"
 run_case "Gentle AI 2.5.0-rc.1 expected 2.5.0" "Gentle AI 2.5.0-rc.1" "2.5.0" "NO MATCH"
+run_case "Pi 0.84.4 expected 0.84.4" "0.84.4" "0.84.4" "MATCH"
+run_case "Pi v0.84.4 expected 0.84.4" "v0.84.4" "0.84.4" "MATCH"
+run_case "Pi 0.84.40 expected 0.84.4" "0.84.40" "0.84.4" "NO MATCH"
+run_case "Pi 0.84.4-rc.1 expected 0.84.4" "0.84.4-rc.1" "0.84.4" "NO MATCH"
 
 echo "cloud_tools_version_matches: ${pass} passed, ${fail} failed"
 [ "$fail" -eq 0 ]

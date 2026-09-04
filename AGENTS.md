@@ -89,6 +89,7 @@ python scripts/test_prediction_readiness.py
 - Use the existing package scripts for CodeGraph, Repomix, and OpenSpec. `npm run repomix:pack` writes `repomix-output.xml`; inspect exclusions and sensitive content before running or sharing it.
 - Archify diagrams must reflect repository evidence and exclude private/generated data.
 - Inspect Gentle AI version, help, compatibility, dry-run output, and generated paths before any installation command. Never run `gentle-ai install` blindly.
+- Pi is a secondary read-only reviewer in Phase 1. Agents must invoke Pi through `.cursor/pi-review.sh`. Raw Pi coding mode, write/edit/bash tools, Pi packages, MCP, subagents, and `gentle-ai install --agent pi` are not approved.
 - Ponytail reinforces KISS/YAGNI and does not require repository scaffolding. Do not add a tool when an installed or native capability already covers the need.
 - RTK is undefined for this project. Do not assume Redux Toolkit or configure RTK until the user identifies the exact tool.
 
