@@ -11,10 +11,44 @@ PI_PACKAGE="@earendil-works/pi-coding-agent"
 PI_EXPECTED_VERSION="0.84.4"
 PI_READONLY_TOOLS="read,grep,find,ls"
 PI_FORBIDDEN_TOOLS="bash,write,edit"
+PI_REVIEW_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 pi_review_fail() {
   echo "!! $*" >&2
   exit 1
+}
+
+pi_review_path_is_beneath() {
+  local child="$1"
+  local parent="$2"
+  child="${child%/}"
+  parent="${parent%/}"
+  [ -n "$child" ] && [ -n "$parent" ] || return 1
+  case "$child" in
+    "${parent}"/*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+pi_review_mktemp_home() {
+  local dir canonical_dir canonical_root
+  if [ ! -d /tmp ] || [ ! -w /tmp ]; then
+    return 1
+  fi
+  dir="$(mktemp -d --tmpdir=/tmp pi-probe.XXXXXX)" || return 1
+  canonical_dir="$(/usr/bin/readlink -f "$dir")" || canonical_dir=""
+  canonical_root="$(/usr/bin/readlink -f "$PI_REVIEW_ROOT")" || canonical_root=""
+  if [ -z "$canonical_dir" ] || [ -z "$canonical_root" ]; then
+    rm -rf "$dir"
+    return 1
+  fi
+  canonical_dir="${canonical_dir%/}"
+  canonical_root="${canonical_root%/}"
+  if [ "$canonical_dir" = "$canonical_root" ] || pi_review_path_is_beneath "$canonical_dir" "$canonical_root"; then
+    rm -rf "$dir"
+    return 1
+  fi
+  printf '%s' "$canonical_dir"
 }
 
 pi_review_version_token() {
@@ -70,10 +104,18 @@ if [ ! -x "$pi_path" ]; then
 fi
 
 # Aislar HOME: `pi --version` escribiría ~/.pi/agent/auth.json en el home real.
-check_home="$(mktemp -d)"
+check_home=""
+if ! check_home="$(pi_review_mktemp_home)"; then
+  pi_review_fail "no se pudo crear un HOME temporal seguro para Pi"
+fi
+if [ -z "$check_home" ]; then
+  pi_review_fail "no se pudo crear un HOME temporal seguro para Pi"
+fi
 # shellcheck disable=SC2064
 trap 'rm -rf "$check_home"' EXIT
-pi_output="$(HOME="$check_home" "$pi_path" --version 2>&1 || true)"
+if ! pi_output="$(HOME="$check_home" "$pi_path" --version 2>&1)"; then
+  pi_review_fail "pi --version falló (${pi_output})"
+fi
 pi_reported="$(pi_review_version_token "$pi_output")" || pi_review_fail "pi --version no reportó una versión (${pi_output})"
 if [ "$pi_reported" != "$PI_EXPECTED_VERSION" ]; then
   pi_review_fail "pi reportó ${pi_reported}; se esperaba ${PI_EXPECTED_VERSION}"

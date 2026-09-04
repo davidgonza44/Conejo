@@ -391,20 +391,68 @@ cloud_tools_pi_mktemp_pack_dir() {
   printf '%s' "$canonical_dir"
 }
 
+# Sibling of the pack-dir helper. Returns 1 on failure so callers in `if`
+# conditions can fail closed instead of inheriting HOME.
+cloud_tools_pi_mktemp_probe_home() {
+  local dir canonical_dir
+  if [ ! -d /tmp ] || [ ! -w /tmp ]; then
+    return 1
+  fi
+  dir="$(mktemp -d --tmpdir=/tmp pi-probe.XXXXXX)" || return 1
+  canonical_dir="$(/usr/bin/readlink -f "$dir")" || canonical_dir=""
+  if [ -z "$canonical_dir" ]; then
+    rm -rf "$dir"
+    return 1
+  fi
+  if cloud_tools_repo_contains_path "$canonical_dir"; then
+    rm -rf "$dir"
+    return 1
+  fi
+  printf '%s' "$canonical_dir"
+}
+
+cloud_tools_pi_npm_pack() {
+  local npm_bin="$1"
+  local package="$2"
+  local version="$3"
+  local pack_dir="$4"
+  (
+    cd -- "$pack_dir" || exit 1
+    npm_config_ignore_scripts=true "$npm_bin" pack "${package}@${version}" \
+      --pack-destination "$pack_dir"
+  ) || cloud_tools_fail "npm pack falló para ${package}@${version}"
+}
+
+cloud_tools_pi_reuse_if_ready() {
+  local prefix="$1"
+  local prefix_pi="$2"
+  [ -x "$prefix_pi" ] || return 1
+  cloud_tools_assert_pi_under_prefix "$prefix_pi" "$prefix"
+  cloud_tools_pi_version_matches "$prefix_pi" "$PI_VERSION"
+}
+
 # Pi-only version probe. Never runs `pi version` (prompt-capable). Isolates HOME
 # in a subshell so a RETURN trap cannot clobber the caller's pack-dir cleanup.
 cloud_tools_pi_version_matches() {
   local binary="$1"
   local expected="$2"
-  local output reported
+  local probe_home output reported
   if [ ! -x "$binary" ]; then
     return 1
   fi
-  output="$(
-    probe_home="$(mktemp -d)"
+  probe_home=""
+  if ! probe_home="$(cloud_tools_pi_mktemp_probe_home)"; then
+    cloud_tools_fail "no se pudo crear un HOME temporal seguro para Pi"
+  fi
+  if [ -z "$probe_home" ]; then
+    cloud_tools_fail "no se pudo crear un HOME temporal seguro para Pi"
+  fi
+  if ! output="$(
     trap 'rm -rf "$probe_home"' EXIT
-    HOME="$probe_home" "$binary" --version 2>/dev/null || true
-  )"
+    HOME="$probe_home" "$binary" --version 2>/dev/null
+  )"; then
+    return 1
+  fi
   [ -n "$output" ] || return 1
   reported="$(cloud_tools_version_token "$output")" || return 1
   [ -n "$reported" ] && [ "$reported" = "${expected#v}" ]
@@ -561,13 +609,10 @@ install_pinned_pi() {
     cloud_tools_fail "No se encontró el node fijado en ${prefix_node}"
   fi
 
-  if [ -x "$prefix_pi" ]; then
-    cloud_tools_assert_pi_under_prefix "$prefix_pi" "$prefix"
-    if cloud_tools_pi_version_matches "$prefix_pi" "$PI_VERSION"; then
-      cloud_tools_publish_pinned_pi "$prefix" "$prefix_pi" "$dest"
-      echo "==> Pi ${PI_VERSION} ya está instalado; se reutiliza ($(command -v pi))."
-      return 0
-    fi
+  if cloud_tools_pi_reuse_if_ready "$prefix" "$prefix_pi"; then
+    cloud_tools_publish_pinned_pi "$prefix" "$prefix_pi" "$dest"
+    echo "==> Pi ${PI_VERSION} ya está instalado; se reutiliza ($(command -v pi))."
+    return 0
   fi
 
   echo "==> Empaquetando ${PI_PACKAGE}@${PI_VERSION} y verificando SRI del tarball"
@@ -577,11 +622,7 @@ install_pinned_pi() {
   # shellcheck disable=SC2064
   trap "rm -rf '$pack_dir'" RETURN EXIT
 
-  (
-    cd "$pack_dir"
-    npm_config_ignore_scripts=true "$npm_bin" pack "${PI_PACKAGE}@${PI_VERSION}" \
-      --pack-destination "$pack_dir"
-  ) || cloud_tools_fail "npm pack falló para ${PI_PACKAGE}@${PI_VERSION}"
+  cloud_tools_pi_npm_pack "$npm_bin" "$PI_PACKAGE" "$PI_VERSION" "$pack_dir"
 
   tgz=""
   for candidate in "$pack_dir"/*.tgz; do

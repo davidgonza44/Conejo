@@ -580,15 +580,12 @@ printf '%s\n' "0.84.4"
 EOF
   chmod +x "$outside"
   ln -sfn "$outside" "$prefix_pi"
-  if (
-    cloud_tools_assert_pi_under_prefix "$prefix_pi" "$prefix"
-    cloud_tools_pi_version_matches "$prefix_pi" "0.84.4"
-  ); then
-    record "escaped prefix_pi is not version-probed" "PASS" "FAIL"
+  if (cloud_tools_pi_reuse_if_ready "$prefix" "$prefix_pi"); then
+    record "reuse helper rejects escaped prefix_pi before --version" "PASS" "FAIL"
   elif [ -s "$log" ]; then
-    record "escaped prefix_pi is not version-probed" "probed: $(cat "$log")" "empty"
+    record "reuse helper rejects escaped prefix_pi before --version" "probed: $(cat "$log")" "empty"
   else
-    record "escaped prefix_pi is not version-probed" "PASS" "PASS"
+    record "reuse helper rejects escaped prefix_pi before --version" "PASS" "PASS"
   fi
   rm -f "$outside"
   rm -rf "$tmpdir"
@@ -598,35 +595,76 @@ list_repo_tgz() {
   find "$ROOT" -name '*.tgz' -print | sort
 }
 
-finding6_pack_dir_ignores_hostile_tmpdir() {
-  local before after created
-  before="$(list_repo_tgz)"
-  created="$(TMPDIR="$ROOT" cloud_tools_pi_mktemp_pack_dir)"
-  after="$(list_repo_tgz)"
-  if [ -z "$created" ]; then
-    record "TMPDIR=ROOT cannot move pack dir into repo" "empty" "outside"
-  elif cloud_tools_repo_contains_path "$created"; then
-    record "TMPDIR=ROOT cannot move pack dir into repo" "$created" "outside"
-  elif [ "$before" != "$after" ]; then
-    record "TMPDIR=ROOT cannot move pack dir into repo" "new tgz" "unchanged"
-  else
-    record "TMPDIR=ROOT cannot move pack dir into repo" "PASS" "PASS"
+write_mock_npm_pack() {
+  local dest="$1"
+  local log="$2"
+  cat > "$dest" <<EOF
+#!/bin/sh
+printf 'argv=%s\n' "\$*" >> "$log"
+printf 'ignore=%s\n' "\${npm_config_ignore_scripts-}" >> "$log"
+dest=""
+prev=""
+for arg in "\$@"; do
+  if [ "\$prev" = "--pack-destination" ]; then
+    dest="\$arg"
   fi
-  rm -rf "$created"
+  prev="\$arg"
+done
+printf 'dest=%s\n' "\$dest" >> "$log"
+# Write the fake tarball only to the received --pack-destination.
+# Never write to cwd, \$TMPDIR, or a guessed path.
+if [ -z "\$dest" ] || [ ! -d "\$dest" ]; then
+  exit 1
+fi
+printf 'fake-tarball\n' > "\$dest/earendil-works-pi-coding-agent-0.84.4.tgz"
+exit 0
+EOF
+  chmod +x "$dest"
+}
 
+assert_pack_contract() {
+  local label="$1"
+  local hostile_tmpdir="$2"
+  local tmpdir mock_npm log pack_dir before after tgz argv ignore dest expected_argv stray
+  tmpdir="$(mktemp -d)"
+  mock_npm="${tmpdir}/npm"
+  log="${tmpdir}/npm.log"
+  write_mock_npm_pack "$mock_npm" "$log"
   before="$(list_repo_tgz)"
-  created="$(TMPDIR="${ROOT}/.cursor" cloud_tools_pi_mktemp_pack_dir)"
+  pack_dir="$(TMPDIR="$hostile_tmpdir" cloud_tools_pi_mktemp_pack_dir)"
+  cloud_tools_pi_npm_pack "$mock_npm" "$PI_PACKAGE" "$PI_VERSION" "$pack_dir"
   after="$(list_repo_tgz)"
-  if [ -z "$created" ]; then
-    record "TMPDIR=ROOT/.cursor cannot move pack dir into repo" "empty" "outside"
-  elif cloud_tools_repo_contains_path "$created"; then
-    record "TMPDIR=ROOT/.cursor cannot move pack dir into repo" "$created" "outside"
+  tgz="${pack_dir}/earendil-works-pi-coding-agent-0.84.4.tgz"
+  argv="$(sed -n 's/^argv=//p' "$log")"
+  ignore="$(sed -n 's/^ignore=//p' "$log")"
+  dest="$(sed -n 's/^dest=//p' "$log")"
+  expected_argv="pack ${PI_PACKAGE}@${PI_VERSION} --pack-destination ${pack_dir}"
+  stray="$(find "$tmpdir" -name '*.tgz' -print | sort || true)"
+  if cloud_tools_repo_contains_path "$pack_dir"; then
+    record "$label" "pack_dir in repo" "outside"
   elif [ "$before" != "$after" ]; then
-    record "TMPDIR=ROOT/.cursor cannot move pack dir into repo" "new tgz" "unchanged"
+    record "$label" "new repo tgz" "unchanged"
+  elif [ -n "$stray" ]; then
+    record "$label" "tgz outside pack_dir: ${stray}" "none"
+  elif [ ! -f "$tgz" ]; then
+    record "$label" "missing fake tgz at pack_dir" "present"
+  elif cloud_tools_repo_contains_path "$tgz"; then
+    record "$label" "tgz in repo" "outside"
+  elif [ "$argv" != "$expected_argv" ]; then
+    record "$label" "argv=${argv}" "${expected_argv}"
+  elif [ "$dest" != "$pack_dir" ]; then
+    record "$label" "dest=${dest}" "${pack_dir}"
+  elif [ "$ignore" != "true" ]; then
+    record "$label" "ignore=${ignore}" "true"
   else
-    record "TMPDIR=ROOT/.cursor cannot move pack dir into repo" "PASS" "PASS"
+    record "$label" "PASS" "PASS"
   fi
-  rm -rf "$created"
+  rm -rf "$pack_dir" "$tmpdir"
+}
+
+finding6_pack_dir_ignores_hostile_tmpdir() {
+  assert_pack_contract "TMPDIR=ROOT pack uses external --pack-destination" "$ROOT"
+  assert_pack_contract "TMPDIR=ROOT/.cursor pack uses external --pack-destination" "${ROOT}/.cursor"
 }
 
 finding6_containment_guard() {
@@ -693,6 +731,194 @@ finding2_hidden_exec_daemon_symlink
 finding2_controlled_symlink_chain
 finding2_dest_only_without_prefix
 finding3_invalid_wrapper_calls
+finding7_version_exit_status() {
+  local tmpdir bin
+  tmpdir="$(mktemp -d)"
+  bin="${tmpdir}/pi"
+  printf '#!/bin/sh\nprintf "0.84.4\\n"\nexit 0\n' > "$bin"
+  chmod +x "$bin"
+  if cloud_tools_pi_version_matches "$bin" "0.84.4"; then
+    record "helper 0.84.4 exit 0 matches" "PASS" "PASS"
+  else
+    record "helper 0.84.4 exit 0 matches" "NO MATCH" "PASS"
+  fi
+  printf '#!/bin/sh\nprintf "0.84.4\\n"\nexit 42\n' > "$bin"
+  if cloud_tools_pi_version_matches "$bin" "0.84.4"; then
+    record "helper 0.84.4 exit 42 rejected" "MATCH" "NO MATCH"
+  else
+    record "helper 0.84.4 exit 42 rejected" "PASS" "PASS"
+  fi
+  printf '#!/bin/sh\nprintf "0.84.40\\n"\nexit 0\n' > "$bin"
+  if cloud_tools_pi_version_matches "$bin" "0.84.4"; then
+    record "helper 0.84.40 exit 0 rejected" "MATCH" "NO MATCH"
+  else
+    record "helper 0.84.40 exit 0 rejected" "PASS" "PASS"
+  fi
+  printf '#!/bin/sh\nexit 0\n' > "$bin"
+  if cloud_tools_pi_version_matches "$bin" "0.84.4"; then
+    record "helper empty exit 0 rejected" "MATCH" "NO MATCH"
+  else
+    record "helper empty exit 0 rejected" "PASS" "PASS"
+  fi
+  printf '#!/bin/sh\nexit 42\n' > "$bin"
+  if cloud_tools_pi_version_matches "$bin" "0.84.4"; then
+    record "helper empty exit 42 rejected" "MATCH" "NO MATCH"
+  else
+    record "helper empty exit 42 rejected" "PASS" "PASS"
+  fi
+  rm -rf "$tmpdir"
+}
+
+finding7_wrapper_exit_status() {
+  local tmpdir mock_bin log rc
+  tmpdir="$(mktemp -d)"
+  mock_bin="${tmpdir}/bin"
+  log="${tmpdir}/pi.log"
+  mkdir -p "$mock_bin"
+  cat > "${mock_bin}/pi" <<EOF
+#!/bin/sh
+printf 'INVOKED %s\n' "\$*" >> "$log"
+printf '%s\n' "0.84.4"
+exit 42
+EOF
+  chmod +x "${mock_bin}/pi"
+  rc=0
+  run_wrapper "$mock_bin" --check >/dev/null 2>&1 || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    record "wrapper 0.84.4 exit 42 rejected" "ok" "fail"
+  elif [ "$(cat "$log")" != "INVOKED --version" ]; then
+    record "wrapper 0.84.4 exit 42 rejected" "log=$(cat "$log")" "--version then fail"
+  else
+    record "wrapper 0.84.4 exit 42 rejected" "PASS" "PASS"
+  fi
+  rm -rf "$tmpdir"
+}
+
+finding7_probe_home_hostile_tmpdir() {
+  local tmpdir bin homelog
+  tmpdir="$(mktemp -d)"
+  bin="${tmpdir}/pi"
+  homelog="${tmpdir}/home.log"
+  cat > "$bin" <<EOF
+#!/bin/sh
+printf '%s\n' "\$HOME" > "$homelog"
+mkdir -p "\$HOME/.pi/agent"
+printf '{}\n' > "\$HOME/.pi/agent/auth.json"
+printf '%s\n' "0.84.4"
+EOF
+  chmod +x "$bin"
+  TMPDIR="$ROOT" cloud_tools_pi_version_matches "$bin" "0.84.4" >/dev/null || true
+  if [ ! -s "$homelog" ]; then
+    record "helper probe HOME ignores TMPDIR=ROOT" "no HOME" "outside"
+  elif cloud_tools_repo_contains_path "$(cat "$homelog")"; then
+    record "helper probe HOME ignores TMPDIR=ROOT" "$(cat "$homelog")" "outside"
+  elif [ -e "${REAL_HOME}/.pi/agent/auth.json" ]; then
+    record "helper probe HOME ignores TMPDIR=ROOT" "wrote real HOME" "isolated"
+  else
+    record "helper probe HOME ignores TMPDIR=ROOT" "PASS" "PASS"
+  fi
+  : > "$homelog"
+  TMPDIR="${ROOT}/.cursor" cloud_tools_pi_version_matches "$bin" "0.84.4" >/dev/null || true
+  if [ ! -s "$homelog" ]; then
+    record "helper probe HOME ignores TMPDIR=ROOT/.cursor" "no HOME" "outside"
+  elif cloud_tools_repo_contains_path "$(cat "$homelog")"; then
+    record "helper probe HOME ignores TMPDIR=ROOT/.cursor" "$(cat "$homelog")" "outside"
+  elif [ -e "${REAL_HOME}/.pi/agent/auth.json" ]; then
+    record "helper probe HOME ignores TMPDIR=ROOT/.cursor" "wrote real HOME" "isolated"
+  else
+    record "helper probe HOME ignores TMPDIR=ROOT/.cursor" "PASS" "PASS"
+  fi
+  rm -rf "$tmpdir"
+}
+
+finding7_wrapper_probe_home_hostile_tmpdir() {
+  local tmpdir mock_bin log rc used_home
+  tmpdir="$(mktemp -d)"
+  mock_bin="${tmpdir}/bin"
+  log="${tmpdir}/home.log"
+  mkdir -p "$mock_bin"
+  cat > "${mock_bin}/pi" <<EOF
+#!/bin/sh
+printf '%s\n' "\$HOME" > "$log"
+mkdir -p "\$HOME/.pi/agent"
+printf '{}\n' > "\$HOME/.pi/agent/auth.json"
+printf '%s\n' "0.84.4"
+EOF
+  chmod +x "${mock_bin}/pi"
+  rc=0
+  TMPDIR="$ROOT" PATH="${mock_bin}:${PATH}" "${ROOT}/.cursor/pi-review.sh" --check >/dev/null 2>&1 || rc=$?
+  used_home="$(sed -n '1p' "$log" 2>/dev/null || true)"
+  if [ "$rc" -ne 0 ]; then
+    record "wrapper probe HOME ignores TMPDIR=ROOT" "rc=$rc" "0"
+  elif [ -z "$used_home" ]; then
+    record "wrapper probe HOME ignores TMPDIR=ROOT" "no HOME" "outside"
+  elif cloud_tools_repo_contains_path "$used_home"; then
+    record "wrapper probe HOME ignores TMPDIR=ROOT" "$used_home" "outside"
+  elif [ -e "${REAL_HOME}/.pi/agent/auth.json" ]; then
+    record "wrapper probe HOME ignores TMPDIR=ROOT" "wrote real HOME" "isolated"
+  else
+    record "wrapper probe HOME ignores TMPDIR=ROOT" "PASS" "PASS"
+  fi
+  rm -rf "$tmpdir"
+}
+
+finding7_probe_home_failure_skips_pi() {
+  local tmpdir bin log survived
+  tmpdir="$(mktemp -d)"
+  bin="${tmpdir}/pi"
+  log="${tmpdir}/argv.log"
+  cat > "$bin" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$log"
+printf '%s\n' "0.84.4"
+EOF
+  chmod +x "$bin"
+  # set +e so a mere return 1 would continue and print SURVIVED.
+  # cloud_tools_fail must exit the subshell before that marker.
+  survived="$(
+    set +e
+    cloud_tools_pi_mktemp_probe_home() { return 1; }
+    cloud_tools_pi_version_matches "$bin" "0.84.4"
+    printf 'SURVIVED\n'
+  )" || true
+  if [ -s "$log" ]; then
+    record "failed probe HOME never invokes Pi" "probed: $(cat "$log")" "empty"
+  elif printf '%s\n' "$survived" | grep -qx SURVIVED; then
+    record "failed probe HOME never invokes Pi" "continued after helper failure" "fail-closed exit"
+  else
+    record "failed probe HOME never invokes Pi" "PASS" "PASS"
+  fi
+  rm -rf "$tmpdir"
+}
+
+finding7_wrapper_probe_home_failure_skips_pi() {
+  local tmpdir mock_bin log rc
+  tmpdir="$(mktemp -d)"
+  mock_bin="${tmpdir}/bin"
+  log="${tmpdir}/pi.log"
+  mkdir -p "$mock_bin"
+  cat > "${mock_bin}/pi" <<EOF
+#!/bin/sh
+printf 'INVOKED %s\n' "\$*" >> "$log"
+printf '%s\n' "0.84.4"
+EOF
+  cat > "${mock_bin}/mktemp" <<'EOF'
+#!/bin/sh
+exit 1
+EOF
+  chmod +x "${mock_bin}/pi" "${mock_bin}/mktemp"
+  rc=0
+  run_wrapper "$mock_bin" --check >/dev/null 2>&1 || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    record "wrapper failed probe HOME never invokes Pi" "ok" "fail"
+  elif [ -s "$log" ]; then
+    record "wrapper failed probe HOME never invokes Pi" "probed: $(cat "$log")" "empty"
+  else
+    record "wrapper failed probe HOME never invokes Pi" "PASS" "PASS"
+  fi
+  rm -rf "$tmpdir"
+}
+
 finding4_known_sri
 finding4_sri_mismatch
 finding4_install_rejects_registry_specs
@@ -705,6 +931,12 @@ finding5_path_and_prefix_agree_externally
 finding5_escaped_prefix_not_probed
 finding6_pack_dir_ignores_hostile_tmpdir
 finding6_containment_guard
+finding7_version_exit_status
+finding7_wrapper_exit_status
+finding7_probe_home_hostile_tmpdir
+finding7_wrapper_probe_home_hostile_tmpdir
+finding7_probe_home_failure_skips_pi
+finding7_wrapper_probe_home_failure_skips_pi
 
 echo "pi phase1 contract: ${pass} passed, ${fail} failed"
 [ "$fail" -eq 0 ]
