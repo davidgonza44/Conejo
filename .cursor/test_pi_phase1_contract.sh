@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Isolated Phase-1 Pi contract checks. Uses mocks under mktemp.
-# Does not install binaries, touch /usr/local, or run npm pack.
+# Isolated mock tests always run. Installed-Pi integration assertions run
+# when the pinned production prefix is provisioned; otherwise they SKIP
+# (they do not silently PASS). Uses mocks under mktemp. Does not install
+# binaries, touch /usr/local, or run npm pack.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -13,6 +15,7 @@ source "${ROOT}/.cursor/install.sh"
 
 pass=0
 fail=0
+skip=0
 REAL_HOME="${HOME:-}"
 
 record() {
@@ -26,6 +29,28 @@ record() {
     echo "FAIL  ${label} (got ${actual}, want ${want})" >&2
     fail=$((fail + 1))
   fi
+}
+
+skip_record() {
+  local label="$1"
+  local reason="$2"
+  echo "SKIP  ${label} (${reason})"
+  skip=$((skip + 1))
+}
+
+# Real pinned prefix + Pi. No environment override of the production trust root.
+production_pi_installation_ready() {
+  local prefix="/usr/local/lib/nodejs/node-${NODE_VERSION}"
+  [ -x "${prefix}/bin/pi" ] && [ -f "${prefix}/${PI_CLI_RELPATH}" ]
+}
+
+require_production_pi_or_skip() {
+  local label="$1"
+  if production_pi_installation_ready; then
+    return 0
+  fi
+  skip_record "$label" "pinned Pi not provisioned"
+  return 1
 }
 
 # Capability probe for isolated SRI/handoff tests. Does not require
@@ -938,6 +963,7 @@ EOF
 
 finding7_wrapper_probe_home_hostile_tmpdir() {
   local rc
+  require_production_pi_or_skip "wrapper probe HOME ignores TMPDIR=ROOT" || return 0
   rc=0
   TMPDIR="$ROOT" "${ROOT}/.cursor/pi-review.sh" --check >/dev/null 2>&1 || rc=$?
   if [ "$rc" -ne 0 ]; then
@@ -1240,11 +1266,11 @@ EOF
 finding_node_preload_hooks_cleared() {
   local file unset_line exec_line
   for file in "${ROOT}/.cursor/install.sh" "${ROOT}/.cursor/pi-review.sh"; do
-    unset_line="$(grep -n '^unset NODE_OPTIONS NODE_PATH$' "$file" | head -n 1 | cut -d: -f1)"
+    unset_line="$(grep -n '^unset NODE_OPTIONS NODE_PATH NODE_V8_COVERAGE$' "$file" | head -n 1 | cut -d: -f1)"
     exec_line="$(grep -nE '"\$(prefix_node|node_bin|PI_PINNED_NODE)"' "$file" | head -n 1 | cut -d: -f1)"
     if [ -z "$unset_line" ]; then
       record "loader hooks cleared before pinned Node ($file)" "no unset" "unset"
-    elif grep -nE '(export )?(NODE_OPTIONS|NODE_PATH)=' "$file" >/dev/null; then
+    elif grep -nE '(export )?(NODE_OPTIONS|NODE_PATH|NODE_V8_COVERAGE)=' "$file" >/dev/null; then
       record "loader hooks cleared before pinned Node ($file)" "re-exported" "unset-only"
     elif [ -z "$exec_line" ] || [ "$unset_line" -lt "$exec_line" ]; then
       record "loader hooks cleared before pinned Node ($file)" "PASS" "PASS"
@@ -1255,13 +1281,21 @@ finding_node_preload_hooks_cleared() {
 }
 
 finding8_wrapper_authenticates_prefix_before_exec() {
-  local gate_line exec_line
-  gate_line="$(grep -n 'pi_review_scan_clean' "${ROOT}/.cursor/pi-review.sh" | head -n 1 | cut -d: -f1)"
-  exec_line="$(grep -nF '"$PI_PINNED_NODE" "$PI_PINNED_CLI" --version' "${ROOT}/.cursor/pi-review.sh" | head -n 1 | cut -d: -f1)"
-  if [ -n "$gate_line" ] && [ -n "$exec_line" ] && [ "$gate_line" -lt "$exec_line" ]; then
-    record "wrapper authenticates prefix metadata before Node exec" "PASS" "PASS"
+  local body call_line exec_line
+  body="$(sed -n '/^pi_review_assert_trust_chain() {/,/^}/p' "${ROOT}/.cursor/pi-review.sh")"
+  if printf '%s\n' "$body" | grep -Fq 'pi_review_scan_clean "$PI_PINNED_NODE_PREFIX"' \
+    && printf '%s\n' "$body" | grep -Fq '! -user root' \
+    && printf '%s\n' "$body" | grep -Fq -- '-perm /022'; then
+    record "pi_review_assert_trust_chain scans prefix provenance" "PASS" "PASS"
   else
-    record "wrapper authenticates prefix metadata before Node exec" "gate=${gate_line} exec=${exec_line}" "gate<exec"
+    record "pi_review_assert_trust_chain scans prefix provenance" "missing scans" "scan calls in body"
+  fi
+  call_line="$(grep -n 'pi_review_assert_trust_chain "$pi_path"' "${ROOT}/.cursor/pi-review.sh" | head -n 1 | cut -d: -f1)"
+  exec_line="$(grep -nF '"$PI_PINNED_NODE" "$PI_PINNED_CLI" --version' "${ROOT}/.cursor/pi-review.sh" | head -n 1 | cut -d: -f1)"
+  if [ -n "$call_line" ] && [ -n "$exec_line" ] && [ "$call_line" -lt "$exec_line" ]; then
+    record "main trust-chain call precedes pinned Node exec" "PASS" "PASS"
+  else
+    record "main trust-chain call precedes pinned Node exec" "call=${call_line:-?} exec=${exec_line:-?}" "call<exec"
   fi
 }
 
@@ -1304,12 +1338,9 @@ finding8_pin_drift_node_prefix() {
 
 finding8_wrapper_accepts_pinned_pi() {
   local prefix prefix_pi resolved expected canonical_prefix output rc
+  require_production_pi_or_skip "wrapper accepts controlled pinned Pi chain" || return 0
   prefix="/usr/local/lib/nodejs/node-${NODE_VERSION}"
   prefix_pi="${prefix}/bin/pi"
-  if [ ! -x "$prefix_pi" ]; then
-    record "wrapper accepts controlled pinned Pi chain" "missing ${prefix_pi}" "present"
-    return 0
-  fi
   rc=0
   output="$("${ROOT}/.cursor/pi-review.sh" --check 2>&1)" || rc=$?
   resolved="$(/usr/bin/readlink -f "$(command -v pi)")" || resolved=""
@@ -1349,6 +1380,7 @@ finding7_probe_home_failure_skips_pi
 finding7_wrapper_probe_home_failure_skips_pi
 finding9_wrapper_malicious_path_node() {
   local tmpdir mock_bin log rc output
+  require_production_pi_or_skip "legitimate Pi + malicious PATH Node" || return 0
   tmpdir="$(mktemp -d)"
   mock_bin="${tmpdir}/bin"
   log="${tmpdir}/node.log"
@@ -1620,15 +1652,108 @@ EOF
       record "hostile PATH ${name} log empty" "PASS" "PASS"
     fi
   done
-  if [ "$rc" -eq 0 ] && printf '%s\n' "$output" | grep -Fq "pi-review check: ok"; then
-    record "hostile PATH wrapper --check" "PASS" "PASS"
-  elif [ "$rc" -ne 0 ] && ! printf '%s\n' "$output" | grep -Fq "INVOKED"; then
-    # Pi may not be published yet; mocks must still stay silent.
-    record "hostile PATH wrapper --check" "PASS" "PASS"
+  if production_pi_installation_ready; then
+    if [ "$rc" -eq 0 ] && printf '%s\n' "$output" | grep -Fq "pi-review check: ok"; then
+      record "hostile PATH wrapper --check" "PASS" "PASS"
+    else
+      record "hostile PATH wrapper --check" "rc=${rc} out=$(printf '%s' "$output" | tr '\n' ' ')" "ok"
+    fi
   else
-    record "hostile PATH wrapper --check" "rc=${rc} out=$(printf '%s' "$output" | tr '\n' ' ')" "ok or fail-closed"
+    skip_record "hostile PATH wrapper --check" "pinned Pi not provisioned"
   fi
   rm -rf "$tmpdir"
+}
+
+finding_parent_chain_isolated() {
+  local tmpdir body node_body pi_body
+  tmpdir="$(mktemp -d)"
+  if cloud_tools_directory_is_root_protected "${tmpdir}/missing"; then
+    record "parent-chain missing path fails closed" "PASS" "FAIL"
+  else
+    record "parent-chain missing path fails closed" "PASS" "PASS"
+  fi
+
+  mkdir -p "${tmpdir}/real"
+  ln -sfn "${tmpdir}/real" "${tmpdir}/link"
+  if cloud_tools_directory_is_root_protected "${tmpdir}/link"; then
+    record "parent-chain symlink relocation fails closed" "PASS" "FAIL"
+  else
+    record "parent-chain symlink relocation fails closed" "PASS" "PASS"
+  fi
+
+  mkdir -p "${tmpdir}/owned/child"
+  chmod 0755 "${tmpdir}/owned" "${tmpdir}/owned/child"
+  if cloud_tools_directory_is_root_protected "${tmpdir}/owned"; then
+    record "parent-chain user-owned dir fails closed" "PASS" "FAIL"
+  else
+    record "parent-chain user-owned dir fails closed" "PASS" "PASS"
+  fi
+  if cloud_tools_parent_chain_is_root_protected "${tmpdir}/owned/child"; then
+    record "parent-chain user-owned ancestor fails closed" "PASS" "FAIL"
+  else
+    record "parent-chain user-owned ancestor fails closed" "PASS" "PASS"
+  fi
+
+  chmod 0777 "${tmpdir}/owned"
+  if cloud_tools_directory_is_root_protected "${tmpdir}/owned"; then
+    record "parent-chain group/other-writable dir fails closed" "PASS" "FAIL"
+  else
+    record "parent-chain group/other-writable dir fails closed" "PASS" "PASS"
+  fi
+  rm -rf "$tmpdir"
+
+  if grep -Fq 'pi_review_directory_is_root_protected' "${ROOT}/.cursor/pi-review.sh" \
+    && grep -Fq 'pi_review_parent_chain_is_root_protected' "${ROOT}/.cursor/pi-review.sh"; then
+    record "wrapper has standalone parent-chain helpers" "PASS" "PASS"
+  else
+    record "wrapper has standalone parent-chain helpers" "missing" "standalone helpers"
+  fi
+  body="$(sed -n '/^pi_review_assert_trust_chain() {/,/^}/p' "${ROOT}/.cursor/pi-review.sh")"
+  if printf '%s\n' "$body" | grep -Fq 'pi_review_parent_chain_is_root_protected'; then
+    record "wrapper trust-chain checks parent directories" "PASS" "PASS"
+  else
+    record "wrapper trust-chain checks parent directories" "missing" "parent-chain call"
+  fi
+  node_body="$(declare -f install_pinned_nodejs)"
+  pi_body="$(declare -f install_pinned_pi)"
+  if printf '%s\n' "$node_body" | grep -Fq 'cloud_tools_parent_chain_is_root_protected' \
+    && printf '%s\n' "$pi_body" | grep -Fq 'cloud_tools_parent_chain_is_root_protected'; then
+    record "installer checks parent chain before Node/Pi trust" "PASS" "PASS"
+  else
+    record "installer checks parent chain before Node/Pi trust" "missing" "parent-chain calls"
+  fi
+}
+
+finding_parent_chain_provisioned() {
+  local prefix="/usr/local/lib/nodejs/node-${NODE_VERSION}"
+  require_production_pi_or_skip "provisioned parent chain is root-protected" || return 0
+  if cloud_tools_parent_chain_is_root_protected "$prefix"; then
+    record "provisioned parent chain is root-protected" "PASS" "PASS"
+  else
+    record "provisioned parent chain is root-protected" "NO" "PASS"
+  fi
+}
+
+finding_wrapper_env_i_and_coverage() {
+  local before after rc
+  if grep -Fq '/usr/bin/env -i' "${ROOT}/.cursor/pi-review.sh" \
+    && ! grep -Fq 'env -i' "${ROOT}/.cursor/install.sh"; then
+    record "wrapper probe uses env -i; installer npm does not" "PASS" "PASS"
+  else
+    record "wrapper probe uses env -i; installer npm does not" "mismatch" "wrapper-only env -i"
+  fi
+  require_production_pi_or_skip "NODE_V8_COVERAGE does not write coverage under ROOT" || return 0
+  before="$(find "$ROOT" -name 'coverage-*.json' -print | sort)"
+  rc=0
+  NODE_V8_COVERAGE="$ROOT" "${ROOT}/.cursor/pi-review.sh" --check >/dev/null 2>&1 || rc=$?
+  after="$(find "$ROOT" -name 'coverage-*.json' -print | sort)"
+  if [ "$rc" -ne 0 ]; then
+    record "NODE_V8_COVERAGE does not write coverage under ROOT" "rc=$rc" "0"
+  elif [ "$before" != "$after" ]; then
+    record "NODE_V8_COVERAGE does not write coverage under ROOT" "new coverage files" "unchanged"
+  else
+    record "NODE_V8_COVERAGE does not write coverage under ROOT" "PASS" "PASS"
+  fi
 }
 
 finding_source_preserves_caller_path
@@ -1639,6 +1764,9 @@ finding_harden_umask_group_writable
 finding_unhardened_never_publishes
 finding_pi_post_install_order
 finding_wrapper_hostile_path_utilities
+finding_parent_chain_isolated
+finding_parent_chain_provisioned
+finding_wrapper_env_i_and_coverage
 
-echo "pi phase1 contract: ${pass} passed, ${fail} failed"
+echo "pi phase1 contract: ${pass} passed, ${fail} failed, ${skip} skipped"
 [ "$fail" -eq 0 ]

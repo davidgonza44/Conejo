@@ -23,7 +23,7 @@ set -euo pipefail
 # Node loader hooks must never reach pinned invocations: an ambient
 # NODE_OPTIONS (--require/--import) or NODE_PATH would load attacker
 # JavaScript into the trusted Node process before any CLI runs.
-unset NODE_OPTIONS NODE_PATH
+unset NODE_OPTIONS NODE_PATH NODE_V8_COVERAGE
 
 # Builtin-only root: parameter expansion + cd + pwd -P. No external utility.
 # PATH is not sanitized here: this file is sourced by isolated contract tests.
@@ -73,7 +73,7 @@ cloud_tools_fail() {
 cloud_tools_bootstrap_execution_environment() {
   PATH="/usr/local/cargo/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin"
   export PATH
-  unset NODE_OPTIONS NODE_PATH
+  unset NODE_OPTIONS NODE_PATH NODE_V8_COVERAGE
   hash -r
 }
 
@@ -258,6 +258,73 @@ cloud_tools_prefix_scan_clean() {
   [ "$rc" -eq 0 ] && [ -z "$hits" ]
 }
 
+# Metadata of one named directory. Does not recurse. Fail closed on a
+# missing path, symlink relocation, stat error, non-root owner/group, or
+# group/other-writable mode.
+cloud_tools_directory_is_root_protected() {
+  local dir="$1"
+  local canonical uid gid mode writable
+  [ -n "$dir" ] || return 1
+  [ -d "$dir" ] || return 1
+  [ ! -L "$dir" ] || return 1
+  [ -x /usr/bin/stat ] || return 1
+  [ -x /usr/bin/readlink ] || return 1
+  canonical="$(/usr/bin/readlink -f -- "$dir")" || return 1
+  [ "${canonical%/}" = "${dir%/}" ] || return 1
+  uid="$(/usr/bin/stat -c '%u' -- "$dir")" || return 1
+  gid="$(/usr/bin/stat -c '%g' -- "$dir")" || return 1
+  mode="$(/usr/bin/stat -c '%a' -- "$dir")" || return 1
+  [ "$uid" = "0" ] && [ "$gid" = "0" ] || return 1
+  [ -n "$mode" ] || return 1
+  writable=$((8#${mode} & 022))
+  [ "$writable" -eq 0 ]
+}
+
+# Ancestors that protect path, from its parent up to /. Does not scan the
+# path itself and does not recurse into /usr or /usr/local.
+cloud_tools_parent_chain_is_root_protected() {
+  local path="$1"
+  local current
+  current="${path%/}"
+  [ -n "$current" ] || return 1
+  if [ "$current" = "/" ]; then
+    cloud_tools_directory_is_root_protected "/"
+    return $?
+  fi
+  while [ "$current" != "/" ]; do
+    current="${current%/*}"
+    if [ -z "$current" ]; then
+      current="/"
+    fi
+    cloud_tools_directory_is_root_protected "$current" || return 1
+  done
+  return 0
+}
+
+# Create /usr/local/lib/nodejs only when absent. A pre-existing directory
+# is verified, not rewritten. Never chmod/chown /, /usr, /usr/local, or
+# /usr/local/lib.
+cloud_tools_ensure_nodejs_lib_dir() {
+  local dir="/usr/local/lib/nodejs"
+  if [ -L "$dir" ]; then
+    cloud_tools_fail "${dir} no puede ser un enlace simbólico"
+  fi
+  if [ ! -d "$dir" ]; then
+    if [ ! -x /usr/bin/mkdir ] || [ ! -x /usr/bin/chown ] || [ ! -x /usr/bin/chmod ]; then
+      cloud_tools_fail "faltan mkdir/chown/chmod absolutos para ${dir}"
+    fi
+    sudo /usr/bin/mkdir -m 0755 -- "$dir" \
+      || cloud_tools_fail "no se pudo crear ${dir}"
+    sudo /usr/bin/chown root:root -- "$dir" \
+      || cloud_tools_fail "no se pudo fijar root:root en ${dir}"
+    sudo /usr/bin/chmod 0755 -- "$dir" \
+      || cloud_tools_fail "no se pudo endurecer ${dir}"
+  fi
+  if ! cloud_tools_directory_is_root_protected "$dir"; then
+    cloud_tools_fail "${dir} no es un directorio controlado root:root"
+  fi
+}
+
 # Same metadata the verified archive install publishes. Isolated fixtures are
 # user-owned; production reuse must call this in addition to prefix_ready.
 cloud_tools_pinned_nodejs_prefix_hardened() {
@@ -369,6 +436,9 @@ install_pinned_nodejs() {
   local dest_resolved prefix_node_resolved
   local prefix="/usr/local/lib/nodejs/node-${NODE_VERSION}"
   if cloud_tools_pinned_nodejs_prefix_reusable "$prefix"; then
+    if ! cloud_tools_parent_chain_is_root_protected "$prefix"; then
+      cloud_tools_fail "la cadena de directorios del prefijo Node no es root ni está endurecida (${prefix})"
+    fi
     echo "==> Node.js ${NODE_VERSION} ya está en el prefijo fijado (${prefix}); se reutiliza."
   else
     local arch node_arch expected_sha
@@ -421,11 +491,14 @@ install_pinned_nodejs() {
     # Hay que conservar el prefijo completo, no copiar solo bin/.
     local staged="${prefix}.tmp"
     sudo rm -rf "$staged"
-    sudo mkdir -p /usr/local/lib/nodejs
+    cloud_tools_ensure_nodejs_lib_dir
     sudo mv "$extracted" "$staged"
     # Harden staging before the live swap: ubuntu-owned extract must not
     # become the published prefix. Symlink modes are left alone.
     cloud_tools_harden_pinned_nodejs_prefix "$staged"
+    if ! cloud_tools_parent_chain_is_root_protected "$prefix"; then
+      cloud_tools_fail "la cadena de directorios del prefijo Node no es root ni está endurecida (${prefix})"
+    fi
     sudo rm -rf "$prefix"
     sudo mv "$staged" "$prefix"
   fi
@@ -788,6 +861,9 @@ install_pinned_pi() {
   local npm_cli="${prefix}/${NPM_CLI_RELPATH}"
   local prefix_pi="${prefix}/bin/pi"
   local dest="${CLOUD_TOOLS_BIN_DIR}/pi"
+  if ! cloud_tools_parent_chain_is_root_protected "$prefix"; then
+    cloud_tools_fail "la cadena de directorios del prefijo Node no es root ni está endurecida (${prefix})"
+  fi
   if ! cloud_tools_pinned_nodejs_prefix_reusable "$prefix"; then
     cloud_tools_fail "Pi requiere el prefijo Node fijado listo (${prefix})"
   fi

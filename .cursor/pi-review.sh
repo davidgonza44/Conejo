@@ -13,7 +13,7 @@ export PATH
 # Node loader hooks must never reach the pinned CLI: an ambient NODE_OPTIONS
 # (--require/--import) or NODE_PATH would load attacker JavaScript into the
 # trusted Node process before the authenticated CLI runs.
-unset NODE_OPTIONS NODE_PATH
+unset NODE_OPTIONS NODE_PATH NODE_V8_COVERAGE
 hash -r
 
 PI_PACKAGE="@earendil-works/pi-coding-agent"
@@ -66,6 +66,47 @@ pi_review_scan_clean() {
   [ "$rc" -eq 0 ] && [ -z "$hits" ]
 }
 
+# Standalone equivalent of install.sh cloud_tools_directory_is_root_protected.
+# Do not source install.sh from this wrapper.
+pi_review_directory_is_root_protected() {
+  local dir="$1"
+  local canonical uid gid mode writable
+  [ -n "$dir" ] || return 1
+  [ -d "$dir" ] || return 1
+  [ ! -L "$dir" ] || return 1
+  [ -x /usr/bin/stat ] || return 1
+  [ -x /usr/bin/readlink ] || return 1
+  canonical="$(/usr/bin/readlink -f -- "$dir")" || return 1
+  [ "${canonical%/}" = "${dir%/}" ] || return 1
+  uid="$(/usr/bin/stat -c '%u' -- "$dir")" || return 1
+  gid="$(/usr/bin/stat -c '%g' -- "$dir")" || return 1
+  mode="$(/usr/bin/stat -c '%a' -- "$dir")" || return 1
+  [ "$uid" = "0" ] && [ "$gid" = "0" ] || return 1
+  [ -n "$mode" ] || return 1
+  writable=$((8#${mode} & 022))
+  [ "$writable" -eq 0 ]
+}
+
+# Standalone equivalent of install.sh cloud_tools_parent_chain_is_root_protected.
+pi_review_parent_chain_is_root_protected() {
+  local path="$1"
+  local current
+  current="${path%/}"
+  [ -n "$current" ] || return 1
+  if [ "$current" = "/" ]; then
+    pi_review_directory_is_root_protected "/"
+    return $?
+  fi
+  while [ "$current" != "/" ]; do
+    current="${current%/*}"
+    if [ -z "$current" ]; then
+      current="/"
+    fi
+    pi_review_directory_is_root_protected "$current" || return 1
+  done
+  return 0
+}
+
 # Authenticate the immutable trust chain before any Node/Pi execution.
 pi_review_assert_trust_chain() {
   local pi_path="$1"
@@ -90,6 +131,9 @@ pi_review_assert_trust_chain() {
   canonical_prefix="${canonical_prefix%/}"
   if [ -z "$canonical_prefix" ] || [ "$canonical_prefix" != "$literal_prefix" ]; then
     pi_review_fail "el prefijo Node fijado no es el directorio literal (${PI_PINNED_NODE_PREFIX} -> ${canonical_prefix:-?})"
+  fi
+  if ! pi_review_parent_chain_is_root_protected "$PI_PINNED_NODE_PREFIX"; then
+    pi_review_fail "la cadena de directorios del prefijo Node no es root ni está endurecida (${PI_PINNED_NODE_PREFIX})"
   fi
   # Provenance before execution: a user-owned or writable entry lets a
   # non-root agent replace bin/node or the Pi CLI in place and have it
@@ -217,7 +261,10 @@ if [ -z "$check_home" ]; then
 fi
 # shellcheck disable=SC2064
 trap 'rm -rf "$check_home"' EXIT
-if ! pi_output="$(HOME="$check_home" "$PI_PINNED_NODE" "$PI_PINNED_CLI" --version 2>&1)"; then
+if [ ! -x /usr/bin/env ]; then
+  pi_review_fail "env no está disponible para aislar la sonda de Pi"
+fi
+if ! pi_output="$(/usr/bin/env -i HOME="$check_home" PATH="$PATH" "$PI_PINNED_NODE" "$PI_PINNED_CLI" --version 2>&1)"; then
   pi_review_fail "pi --version falló (${pi_output})"
 fi
 pi_reported="$(pi_review_version_token "$pi_output")" || pi_review_fail "pi --version no reportó una versión (${pi_output})"
