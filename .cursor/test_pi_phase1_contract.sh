@@ -1492,8 +1492,9 @@ finding_harden_umask_group_writable() {
   write_ready_node_prefix "$prefix" "v22.23.2" "10.9.8" "0" "0" "$log"
   chmod 0775 "$prefix" "${prefix}/bin" "${prefix}/lib" "${prefix}/lib/node_modules" \
     "${prefix}/lib/node_modules/npm" "${prefix}/lib/node_modules/npm/bin" \
-    "${prefix}/bin/node"
-  chmod 0664 "${prefix}/lib/node_modules/npm/bin/npm-cli.js"
+    "${prefix}/bin/node" "${prefix}/lib/node_modules/npm/bin/npm-cli.js"
+  printf 'readme\n' > "${prefix}/README"
+  chmod 0664 "${prefix}/README"
   printf 'outside\n' > "$outside"
   chmod 0666 "$outside"
   ln -sfn "$outside" "${prefix}/bin/outside-link"
