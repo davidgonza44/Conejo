@@ -1716,11 +1716,57 @@ finding_parent_chain_isolated() {
   fi
   node_body="$(declare -f install_pinned_nodejs)"
   pi_body="$(declare -f install_pinned_pi)"
-  if printf '%s\n' "$node_body" | grep -Fq 'cloud_tools_parent_chain_is_root_protected' \
-    && printf '%s\n' "$pi_body" | grep -Fq 'cloud_tools_parent_chain_is_root_protected'; then
+  if printf '%s\n' "$node_body" | grep -Fq 'cloud_tools_assert_parent_chain_root_protected' \
+    && printf '%s\n' "$pi_body" | grep -Fq 'cloud_tools_assert_parent_chain_root_protected'; then
     record "installer checks parent chain before Node/Pi trust" "PASS" "PASS"
   else
-    record "installer checks parent chain before Node/Pi trust" "missing" "parent-chain calls"
+    record "installer checks parent chain before Node/Pi trust" "missing" "parent-chain assert"
+  fi
+}
+
+finding_nodejs_parent_chain_before_reusable() {
+  local tmpdir log body ensure_n assert_n reusable_n ensure_body parent_n mkdir_n
+  tmpdir="$(mktemp -d)"
+  log="${tmpdir}/node.log"
+  : > "$log"
+  mkdir -p "${tmpdir}/child"
+  if (
+    cloud_tools_pinned_nodejs_prefix_reusable() {
+      printf 'REUSABLE\n' >> "$log"
+      return 0
+    }
+    cloud_tools_assert_parent_chain_root_protected "${tmpdir}/child"
+    cloud_tools_pinned_nodejs_prefix_reusable "${tmpdir}/child"
+  ) >/dev/null 2>&1; then
+    record "shared parent-chain gate fails closed before reusable" "PASS" "FAIL"
+  elif [ -s "$log" ]; then
+    record "shared parent-chain gate fails closed before reusable" "probed: $(cat "$log")" "empty"
+  else
+    record "shared parent-chain gate fails closed before reusable" "PASS" "PASS"
+  fi
+  rm -rf "$tmpdir"
+
+  body="$(declare -f install_pinned_nodejs)"
+  ensure_n="$(printf '%s\n' "$body" | grep -n 'cloud_tools_ensure_nodejs_lib_dir' | head -n 1 | cut -d: -f1)"
+  assert_n="$(printf '%s\n' "$body" | grep -n 'cloud_tools_assert_parent_chain_root_protected' | head -n 1 | cut -d: -f1)"
+  reusable_n="$(printf '%s\n' "$body" | grep -n 'cloud_tools_pinned_nodejs_prefix_reusable' | head -n 1 | cut -d: -f1)"
+  if [ -n "$ensure_n" ] && [ -n "$assert_n" ] && [ -n "$reusable_n" ] \
+    && [ "$ensure_n" -lt "$assert_n" ] && [ "$assert_n" -lt "$reusable_n" ]; then
+    record "install_pinned_nodejs authenticates ancestors before reusable" "PASS" "PASS"
+  else
+    record "install_pinned_nodejs authenticates ancestors before reusable" \
+      "ensure=${ensure_n:-?} assert=${assert_n:-?} reusable=${reusable_n:-?}" \
+      "ensure<assert<reusable"
+  fi
+
+  ensure_body="$(declare -f cloud_tools_ensure_nodejs_lib_dir)"
+  parent_n="$(printf '%s\n' "$ensure_body" | grep -n 'cloud_tools_assert_parent_chain_root_protected' | head -n 1 | cut -d: -f1)"
+  mkdir_n="$(printf '%s\n' "$ensure_body" | grep -n '/usr/bin/mkdir' | head -n 1 | cut -d: -f1)"
+  if [ -n "$parent_n" ] && [ -n "$mkdir_n" ] && [ "$parent_n" -lt "$mkdir_n" ]; then
+    record "ensure nodejs dir authenticates parents before mkdir" "PASS" "PASS"
+  else
+    record "ensure nodejs dir authenticates parents before mkdir" \
+      "assert=${parent_n:-?} mkdir=${mkdir_n:-?}" "assert<mkdir"
   fi
 }
 
@@ -1766,6 +1812,7 @@ finding_pi_post_install_order
 finding_wrapper_hostile_path_utilities
 finding_parent_chain_isolated
 finding_parent_chain_provisioned
+finding_nodejs_parent_chain_before_reusable
 finding_wrapper_env_i_and_coverage
 
 echo "pi phase1 contract: ${pass} passed, ${fail} failed, ${skip} skipped"

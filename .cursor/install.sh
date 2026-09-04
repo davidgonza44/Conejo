@@ -301,25 +301,39 @@ cloud_tools_parent_chain_is_root_protected() {
   return 0
 }
 
-# Create /usr/local/lib/nodejs only when absent. A pre-existing directory
-# is verified, not rewritten. Never chmod/chown /, /usr, /usr/local, or
-# /usr/local/lib.
+# Fail closed. Ancestors of path must be authenticated before prefix_reusable
+# or any Node/npm probe that depends on that path.
+cloud_tools_assert_parent_chain_root_protected() {
+  local path="$1"
+  if ! cloud_tools_parent_chain_is_root_protected "$path"; then
+    cloud_tools_fail "la cadena de directorios del prefijo Node no es root ni está endurecida (${path})"
+  fi
+}
+
+# Create /usr/local/lib/nodejs only when absent. Authenticate existing
+# ancestors first. A pre-existing directory is verified, not rewritten.
+# Never chmod/chown /, /usr, /usr/local, or /usr/local/lib.
 cloud_tools_ensure_nodejs_lib_dir() {
   local dir="/usr/local/lib/nodejs"
+  cloud_tools_assert_parent_chain_root_protected "$dir"
   if [ -L "$dir" ]; then
     cloud_tools_fail "${dir} no puede ser un enlace simbólico"
   fi
-  if [ ! -d "$dir" ]; then
-    if [ ! -x /usr/bin/mkdir ] || [ ! -x /usr/bin/chown ] || [ ! -x /usr/bin/chmod ]; then
-      cloud_tools_fail "faltan mkdir/chown/chmod absolutos para ${dir}"
+  if [ -d "$dir" ]; then
+    if ! cloud_tools_directory_is_root_protected "$dir"; then
+      cloud_tools_fail "${dir} no es un directorio controlado root:root"
     fi
-    sudo /usr/bin/mkdir -m 0755 -- "$dir" \
-      || cloud_tools_fail "no se pudo crear ${dir}"
-    sudo /usr/bin/chown root:root -- "$dir" \
-      || cloud_tools_fail "no se pudo fijar root:root en ${dir}"
-    sudo /usr/bin/chmod 0755 -- "$dir" \
-      || cloud_tools_fail "no se pudo endurecer ${dir}"
+    return 0
   fi
+  if [ ! -x /usr/bin/mkdir ] || [ ! -x /usr/bin/chown ] || [ ! -x /usr/bin/chmod ]; then
+    cloud_tools_fail "faltan mkdir/chown/chmod absolutos para ${dir}"
+  fi
+  sudo /usr/bin/mkdir -m 0755 -- "$dir" \
+    || cloud_tools_fail "no se pudo crear ${dir}"
+  sudo /usr/bin/chown root:root -- "$dir" \
+    || cloud_tools_fail "no se pudo fijar root:root en ${dir}"
+  sudo /usr/bin/chmod 0755 -- "$dir" \
+    || cloud_tools_fail "no se pudo endurecer ${dir}"
   if ! cloud_tools_directory_is_root_protected "$dir"; then
     cloud_tools_fail "${dir} no es un directorio controlado root:root"
   fi
@@ -435,10 +449,9 @@ install_pinned_nodejs() {
   local dest_npm="${CLOUD_TOOLS_BIN_DIR}/npm"
   local dest_resolved prefix_node_resolved
   local prefix="/usr/local/lib/nodejs/node-${NODE_VERSION}"
+  cloud_tools_ensure_nodejs_lib_dir
+  cloud_tools_assert_parent_chain_root_protected "$prefix"
   if cloud_tools_pinned_nodejs_prefix_reusable "$prefix"; then
-    if ! cloud_tools_parent_chain_is_root_protected "$prefix"; then
-      cloud_tools_fail "la cadena de directorios del prefijo Node no es root ni está endurecida (${prefix})"
-    fi
     echo "==> Node.js ${NODE_VERSION} ya está en el prefijo fijado (${prefix}); se reutiliza."
   else
     local arch node_arch expected_sha
@@ -491,14 +504,11 @@ install_pinned_nodejs() {
     # Hay que conservar el prefijo completo, no copiar solo bin/.
     local staged="${prefix}.tmp"
     sudo rm -rf "$staged"
-    cloud_tools_ensure_nodejs_lib_dir
     sudo mv "$extracted" "$staged"
     # Harden staging before the live swap: ubuntu-owned extract must not
     # become the published prefix. Symlink modes are left alone.
     cloud_tools_harden_pinned_nodejs_prefix "$staged"
-    if ! cloud_tools_parent_chain_is_root_protected "$prefix"; then
-      cloud_tools_fail "la cadena de directorios del prefijo Node no es root ni está endurecida (${prefix})"
-    fi
+    cloud_tools_assert_parent_chain_root_protected "$prefix"
     sudo rm -rf "$prefix"
     sudo mv "$staged" "$prefix"
   fi
@@ -861,9 +871,7 @@ install_pinned_pi() {
   local npm_cli="${prefix}/${NPM_CLI_RELPATH}"
   local prefix_pi="${prefix}/bin/pi"
   local dest="${CLOUD_TOOLS_BIN_DIR}/pi"
-  if ! cloud_tools_parent_chain_is_root_protected "$prefix"; then
-    cloud_tools_fail "la cadena de directorios del prefijo Node no es root ni está endurecida (${prefix})"
-  fi
+  cloud_tools_assert_parent_chain_root_protected "$prefix"
   if ! cloud_tools_pinned_nodejs_prefix_reusable "$prefix"; then
     cloud_tools_fail "Pi requiere el prefijo Node fijado listo (${prefix})"
   fi
