@@ -16,6 +16,9 @@ jobs:
     # tab/newline/CR as the two-char sequences \t \n \r, which match the
     # literals below; padding unifies start/end of comment with space.
     # Longer tokens such as /occlusion or /opencode-config never match.
+    # Fork guard: inline review comments on external-fork PRs must not reach
+    # the secret-bearing steps. issue_comment short-circuits first so it never
+    # depends on the pull_request object.
     if: |
       (contains(toJSON(format(' {0} ', github.event.comment.body)), ' /oc ') ||
       contains(toJSON(format(' {0} ', github.event.comment.body)), ' /oc\n') ||
@@ -27,13 +30,15 @@ jobs:
       contains(toJSON(format(' {0} ', github.event.comment.body)), ' /opencode\r')) &&
       (github.event.comment.author_association == 'OWNER' ||
       github.event.comment.author_association == 'MEMBER' ||
-      github.event.comment.author_association == 'COLLABORATOR')
+      github.event.comment.author_association == 'COLLABORATOR') &&
+      (github.event_name == 'issue_comment' ||
+      github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     permissions:
       id-token: write
       contents: read
-      pull-requests: read
-      issues: read
+      pull-requests: write
+      issues: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
