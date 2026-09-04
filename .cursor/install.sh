@@ -219,17 +219,25 @@ cloud_tools_literal_prefix_holds() {
   [ "$canonical" = "$literal" ]
 }
 
+# Fail closed: a traversal error (nonzero find status, e.g. Permission denied
+# inside an execute-only directory) rejects the prefix even when the partial
+# stdout is empty. Declaration and capture stay split so set -e is safe.
+cloud_tools_prefix_scan_clean() {
+  local prefix="$1"
+  shift
+  local hits rc
+  rc=0
+  hits="$(find "$prefix" "$@" -print)" || rc=$?
+  [ "$rc" -eq 0 ] && [ -z "$hits" ]
+}
+
 # Same metadata the verified archive install publishes. Isolated fixtures are
 # user-owned; production reuse must call this in addition to prefix_ready.
 cloud_tools_pinned_nodejs_prefix_hardened() {
   local prefix="$1"
   [ -d "$prefix" ] || return 1
-  if [ -n "$(find "$prefix" \( ! -user root -o ! -group root \) -print)" ]; then
-    return 1
-  fi
-  if [ -n "$(find "$prefix" ! -type l -perm /022 -print)" ]; then
-    return 1
-  fi
+  cloud_tools_prefix_scan_clean "$prefix" \( ! -user root -o ! -group root \) || return 1
+  cloud_tools_prefix_scan_clean "$prefix" ! -type l -perm /022 || return 1
   return 0
 }
 
@@ -265,6 +273,14 @@ cloud_tools_pinned_nodejs_prefix_ready() {
   fi
   [ "$npm_ver" = "$NODE_NPM_VERSION" ] || return 1
   return 0
+}
+
+# Reuse gate. Provenance (root ownership, modes) is evaluated before any
+# readiness probe executes prefix Node or npm-cli.js.
+cloud_tools_pinned_nodejs_prefix_reusable() {
+  local prefix="$1"
+  cloud_tools_pinned_nodejs_prefix_hardened "$prefix" \
+    && cloud_tools_pinned_nodejs_prefix_ready "$prefix"
 }
 
 cloud_tools_assert_pinned_pi_cli() {
@@ -307,8 +323,7 @@ install_pinned_nodejs() {
   local dest_npm="${CLOUD_TOOLS_BIN_DIR}/npm"
   local dest_resolved prefix_node_resolved
   local prefix="/usr/local/lib/nodejs/node-${NODE_VERSION}"
-  if cloud_tools_pinned_nodejs_prefix_ready "$prefix" \
-    && cloud_tools_pinned_nodejs_prefix_hardened "$prefix"; then
+  if cloud_tools_pinned_nodejs_prefix_reusable "$prefix"; then
     echo "==> Node.js ${NODE_VERSION} ya está en el prefijo fijado (${prefix}); se reutiliza."
   else
     local arch node_arch expected_sha
@@ -388,11 +403,11 @@ install_pinned_nodejs() {
   if [ ! -x "${prefix}/bin/node" ] || [ ! -x "${prefix}/bin/npm" ]; then
     cloud_tools_fail "Pi requiere ${prefix}/bin/node y ${prefix}/bin/npm"
   fi
-  if ! cloud_tools_pinned_nodejs_prefix_ready "$prefix"; then
-    cloud_tools_fail "el prefijo Node fijado no quedó listo (${prefix})"
-  fi
   if ! cloud_tools_pinned_nodejs_prefix_hardened "$prefix"; then
     cloud_tools_fail "el prefijo Node fijado no conservó root:root sin escritura group/other (${prefix})"
+  fi
+  if ! cloud_tools_pinned_nodejs_prefix_ready "$prefix"; then
+    cloud_tools_fail "el prefijo Node fijado no quedó listo (${prefix})"
   fi
   dest_resolved="$(cloud_tools_canonical "$dest_node")" || dest_resolved=""
   prefix_node_resolved="$(cloud_tools_canonical "${prefix}/bin/node")" || prefix_node_resolved=""
@@ -675,6 +690,37 @@ cloud_tools_pi_install_verified_tarball() {
   fi
 }
 
+# Shared pack -> verify -> install handoff. Selects the single .tgz the pack
+# stage wrote, verifies its bytes against the expected SRI, and installs that
+# exact pathname. Zero/multiple candidates or an SRI mismatch fail closed
+# without invoking npm install.
+cloud_tools_pi_install_verified_pack() {
+  local node_bin="$1"
+  local npm_cli="$2"
+  local prefix="$3"
+  local pack_dir="$4"
+  local expected_sri="$5"
+  local tgz="" candidate sri
+  for candidate in "$pack_dir"/*.tgz; do
+    if [ ! -f "$candidate" ]; then
+      continue
+    fi
+    if [ -n "$tgz" ]; then
+      cloud_tools_fail "npm pack escribió más de un tarball en ${pack_dir}"
+    fi
+    tgz="$candidate"
+  done
+  if [ -z "$tgz" ]; then
+    cloud_tools_fail "npm pack no escribió un tarball en ${pack_dir}"
+  fi
+  sri="$(cloud_tools_sha512_sri "$tgz" "$node_bin")"
+  if [ "$sri" != "$expected_sri" ]; then
+    cloud_tools_fail "Integrity del tarball no coincide (calculada ${sri}; fijada ${expected_sri})"
+  fi
+  echo "==> SRI del tarball verificado: ${sri}"
+  cloud_tools_pi_install_verified_tarball "$node_bin" "$npm_cli" "$prefix" "$tgz"
+}
+
 cloud_tools_publish_pinned_pi() {
   local prefix="$1"
   local prefix_pi="$2"
@@ -707,7 +753,7 @@ install_pinned_pi() {
   local npm_cli="${prefix}/${NPM_CLI_RELPATH}"
   local prefix_pi="${prefix}/bin/pi"
   local dest="${CLOUD_TOOLS_BIN_DIR}/pi"
-  if ! cloud_tools_pinned_nodejs_prefix_ready "$prefix"; then
+  if ! cloud_tools_pinned_nodejs_prefix_reusable "$prefix"; then
     cloud_tools_fail "Pi requiere el prefijo Node fijado listo (${prefix})"
   fi
 
@@ -718,7 +764,7 @@ install_pinned_pi() {
   fi
 
   echo "==> Empaquetando ${PI_PACKAGE}@${PI_VERSION} y verificando SRI del tarball"
-  local pack_dir tgz candidate sri
+  local pack_dir
   pack_dir="$(cloud_tools_pi_mktemp_pack_dir)"
   # EXIT covers cloud_tools_fail; RETURN covers a successful return.
   # shellcheck disable=SC2064
@@ -726,27 +772,7 @@ install_pinned_pi() {
 
   cloud_tools_pi_npm_pack "$prefix_node" "$npm_cli" "$PI_PACKAGE" "$PI_VERSION" "$pack_dir"
 
-  tgz=""
-  for candidate in "$pack_dir"/*.tgz; do
-    if [ ! -f "$candidate" ]; then
-      continue
-    fi
-    if [ -n "$tgz" ]; then
-      cloud_tools_fail "npm pack escribió más de un tarball en ${pack_dir}"
-    fi
-    tgz="$candidate"
-  done
-  if [ -z "$tgz" ]; then
-    cloud_tools_fail "npm pack no escribió un tarball en ${pack_dir}"
-  fi
-
-  sri="$(cloud_tools_sha512_sri "$tgz" "$prefix_node")"
-  if [ "$sri" != "$PI_NPM_INTEGRITY" ]; then
-    cloud_tools_fail "Integrity del tarball no coincide (calculada ${sri}; fijada ${PI_NPM_INTEGRITY})"
-  fi
-  echo "==> SRI del tarball verificado: ${sri}"
-
-  cloud_tools_pi_install_verified_tarball "$prefix_node" "$npm_cli" "$prefix" "$tgz"
+  cloud_tools_pi_install_verified_pack "$prefix_node" "$npm_cli" "$prefix" "$pack_dir" "$PI_NPM_INTEGRITY"
   cloud_tools_publish_pinned_pi "$prefix" "$prefix_pi" "$dest"
 
   if ! cloud_tools_pinned_nodejs_prefix_ready "$prefix"; then
@@ -764,7 +790,7 @@ install_repo_npm_tooling() {
   local prefix="/usr/local/lib/nodejs/node-${NODE_VERSION}"
   local prefix_node="${prefix}/bin/node"
   local npm_cli="${prefix}/${NPM_CLI_RELPATH}"
-  if ! cloud_tools_pinned_nodejs_prefix_ready "$prefix"; then
+  if ! cloud_tools_pinned_nodejs_prefix_reusable "$prefix"; then
     cloud_tools_fail "npm ci requiere el prefijo Node fijado listo (${prefix})"
   fi
   "$prefix_node" "$npm_cli" ci

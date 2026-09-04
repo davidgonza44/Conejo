@@ -36,6 +36,17 @@ pi_review_path_is_beneath() {
   esac
 }
 
+# Fail-closed prefix metadata scan. A traversal error (nonzero find status)
+# rejects the prefix even when the partial stdout is empty.
+pi_review_scan_clean() {
+  local prefix="$1"
+  shift
+  local hits rc
+  rc=0
+  hits="$(find "$prefix" "$@" -print)" || rc=$?
+  [ "$rc" -eq 0 ] && [ -z "$hits" ]
+}
+
 # Authenticate the immutable trust chain before any Node/Pi execution.
 pi_review_assert_trust_chain() {
   local pi_path="$1"
@@ -60,6 +71,13 @@ pi_review_assert_trust_chain() {
   canonical_prefix="${canonical_prefix%/}"
   if [ -z "$canonical_prefix" ] || [ "$canonical_prefix" != "$literal_prefix" ]; then
     pi_review_fail "el prefijo Node fijado no es el directorio literal (${PI_PINNED_NODE_PREFIX} -> ${canonical_prefix:-?})"
+  fi
+  # Provenance before execution: a user-owned or writable entry lets a
+  # non-root agent replace bin/node or the Pi CLI in place and have it
+  # report the expected version. Reject before any Node invocation.
+  if ! pi_review_scan_clean "$PI_PINNED_NODE_PREFIX" \( ! -user root -o ! -group root \) \
+    || ! pi_review_scan_clean "$PI_PINNED_NODE_PREFIX" ! -type l -perm /022; then
+    pi_review_fail "el prefijo Node fijado no es root ni está endurecido (${PI_PINNED_NODE_PREFIX})"
   fi
   if [ ! -x "$PI_PINNED_NODE" ]; then
     pi_review_fail "falta Node en el prefijo fijado (${PI_PINNED_NODE})"

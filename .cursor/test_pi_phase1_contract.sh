@@ -746,6 +746,60 @@ EOF
   rm -rf "$tmpdir"
 }
 
+finding4_verified_pack_handoff() {
+  local tmpdir pack_dir prefix log node_bin npm_cli tgz sri
+  node_bin="$(pinned_node)" || {
+    record "verified pack handoff installs hashed tarball" "no node ${NODE_VERSION}" "present"
+    return 0
+  }
+  tmpdir="$(mktemp -d)"
+  pack_dir="${tmpdir}/pack"
+  prefix="${tmpdir}/prefix"
+  log="${tmpdir}/npm.log"
+  mkdir -p "$pack_dir" "$prefix"
+  tgz="${pack_dir}/earendil-works-pi-coding-agent-0.84.4.tgz"
+  printf 'verified-handoff-tarball\n' > "$tgz"
+  npm_cli="${tmpdir}/npm-cli.js"
+  cat > "$npm_cli" <<EOF
+const fs = require("fs");
+fs.appendFileSync("$log", process.argv.slice(2).join(" ") + "\n");
+EOF
+  sri="$(cloud_tools_sha512_sri "$tgz" "$node_bin")"
+  : > "$log"
+  if ! (cloud_tools_pi_install_verified_pack "$node_bin" "$npm_cli" "$prefix" "$pack_dir" "$sri"); then
+    record "verified pack handoff installs hashed tarball" "FAIL" "PASS"
+    rm -rf "$tmpdir"
+    return 0
+  fi
+  if grep -Fx -- "install -g --prefix ${prefix} --ignore-scripts ${tgz}" "$log" >/dev/null \
+    && ! grep -F -- "@earendil-works/pi-coding-agent@" "$log" >/dev/null \
+    && ! grep -F -- "latest" "$log" >/dev/null; then
+    record "verified pack handoff installs hashed tarball" "PASS" "PASS"
+  else
+    record "verified pack handoff installs hashed tarball" "argv=$(cat "$log")" "install ${tgz}"
+  fi
+
+  : > "$log"
+  if (cloud_tools_pi_install_verified_pack "$node_bin" "$npm_cli" "$prefix" "$pack_dir" "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="); then
+    record "verified pack handoff rejects SRI mismatch" "PASS" "FAIL"
+  elif [ -s "$log" ]; then
+    record "verified pack handoff rejects SRI mismatch" "npm ran: $(cat "$log")" "no npm"
+  else
+    record "verified pack handoff rejects SRI mismatch" "PASS" "PASS"
+  fi
+
+  printf 'second\n' > "${pack_dir}/second.tgz"
+  : > "$log"
+  if (cloud_tools_pi_install_verified_pack "$node_bin" "$npm_cli" "$prefix" "$pack_dir" "$sri"); then
+    record "verified pack handoff rejects multiple candidates" "PASS" "FAIL"
+  elif [ -s "$log" ]; then
+    record "verified pack handoff rejects multiple candidates" "npm ran: $(cat "$log")" "no npm"
+  else
+    record "verified pack handoff rejects multiple candidates" "PASS" "PASS"
+  fi
+  rm -rf "$tmpdir"
+}
+
 finding1_only_version_flag
 finding1_generic_helper_still_tries_version
 finding1_home_isolation
@@ -1111,8 +1165,62 @@ finding8_prefix_hardened_rejects_user_tree() {
   rm -rf "$tmpdir"
 }
 
+finding8_reuse_gate_probes_nothing_unhardened() {
+  local tmpdir prefix log
+  tmpdir="$(mktemp -d)"
+  prefix="${tmpdir}/node-${NODE_VERSION}"
+  log="${tmpdir}/argv.log"
+  : > "$log"
+  write_ready_node_prefix "$prefix" "v22.23.2" "10.9.8" "0" "0" "$log"
+  chmod 0777 "${prefix}/bin/node"
+  if cloud_tools_pinned_nodejs_prefix_reusable "$prefix"; then
+    record "reuse gate rejects writable prefix without probing" "PASS" "FAIL"
+  elif [ -s "$log" ]; then
+    record "reuse gate rejects writable prefix without probing" "probed: $(cat "$log")" "empty"
+  else
+    record "reuse gate rejects writable prefix without probing" "PASS" "PASS"
+  fi
+  rm -rf "$tmpdir"
+}
+
+finding8_hardened_rejects_scan_error() {
+  local tmpdir prefix bindir old_path
+  tmpdir="$(mktemp -d)"
+  prefix="${tmpdir}/node-${NODE_VERSION}"
+  write_ready_node_prefix "$prefix"
+  bindir="${tmpdir}/fakebin"
+  mkdir -p "$bindir"
+  cat > "${bindir}/find" <<EOF
+#!/bin/sh
+echo "mock-find: Permission denied" >&2
+exit 1
+EOF
+  chmod +x "${bindir}/find"
+  old_path="$PATH"
+  PATH="${bindir}:$PATH"
+  if cloud_tools_pinned_nodejs_prefix_hardened "$prefix"; then
+    PATH="$old_path"
+    record "hardened rejects prefix on scan error" "PASS" "FAIL"
+  else
+    PATH="$old_path"
+    record "hardened rejects prefix on scan error" "PASS" "PASS"
+  fi
+  rm -rf "$tmpdir"
+}
+
+finding8_wrapper_authenticates_prefix_before_exec() {
+  local gate_line exec_line
+  gate_line="$(grep -n 'pi_review_scan_clean' "${ROOT}/.cursor/pi-review.sh" | head -n 1 | cut -d: -f1)"
+  exec_line="$(grep -nF '"$PI_PINNED_NODE" "$PI_PINNED_CLI" --version' "${ROOT}/.cursor/pi-review.sh" | head -n 1 | cut -d: -f1)"
+  if [ -n "$gate_line" ] && [ -n "$exec_line" ] && [ "$gate_line" -lt "$exec_line" ]; then
+    record "wrapper authenticates prefix metadata before Node exec" "PASS" "PASS"
+  else
+    record "wrapper authenticates prefix metadata before Node exec" "gate=${gate_line} exec=${exec_line}" "gate<exec"
+  fi
+}
+
 finding8_pin_drift_node_prefix() {
-  local encoded want cli_line
+  local encoded want cli_line install_pi wrapper_pi install_sri approved_sri
   encoded="$(sed -n 's/^PI_PINNED_NODE_PREFIX="\(.*\)"/\1/p' "${ROOT}/.cursor/pi-review.sh" | head -n 1)"
   want="/usr/local/lib/nodejs/node-${NODE_VERSION}"
   if [ "$encoded" = "$want" ]; then
@@ -1126,6 +1234,25 @@ finding8_pin_drift_node_prefix() {
     record "Pi 0.84.4 CLI remains dist/bundle/cli.js" "PASS" "PASS"
   else
     record "Pi 0.84.4 CLI remains dist/bundle/cli.js" "${cli_line}" "PI_PINNED_NODE_PREFIX/.../dist/bundle/cli.js"
+  fi
+  install_pi="$(sed -n 's/^PI_VERSION="\(.*\)"/\1/p' "${ROOT}/.cursor/install.sh" | head -n 1)"
+  wrapper_pi="$(sed -n 's/^PI_EXPECTED_VERSION="\(.*\)"/\1/p' "${ROOT}/.cursor/pi-review.sh" | head -n 1)"
+  if [ -n "$install_pi" ] && [ "$install_pi" = "0.84.4" ]; then
+    record "install.sh PI_VERSION is 0.84.4" "PASS" "PASS"
+  else
+    record "install.sh PI_VERSION is 0.84.4" "${install_pi}" "0.84.4"
+  fi
+  if [ -n "$wrapper_pi" ] && [ "$wrapper_pi" = "$install_pi" ]; then
+    record "pi-review PI_EXPECTED_VERSION matches install.sh PI_VERSION" "PASS" "PASS"
+  else
+    record "pi-review PI_EXPECTED_VERSION matches install.sh PI_VERSION" "${wrapper_pi}" "${install_pi}"
+  fi
+  approved_sri="sha512-jmOlrqUmvhh/siNWFRXjYLJzhKFIHNsAQaysRwzQPQFnPAaV/vhqHsLH/MBsIISA1Rjj7WTUFR3nJrpXoLx39w=="
+  install_sri="$(sed -n 's/^PI_NPM_INTEGRITY="\(.*\)"/\1/p' "${ROOT}/.cursor/install.sh" | head -n 1)"
+  if [ -n "$install_sri" ] && [ "$install_sri" = "$approved_sri" ]; then
+    record "PI_NPM_INTEGRITY is the approved SRI" "PASS" "PASS"
+  else
+    record "PI_NPM_INTEGRITY is the approved SRI" "${install_sri}" "${approved_sri}"
   fi
 }
 
@@ -1159,6 +1286,7 @@ finding4_known_sri
 finding4_sri_mismatch
 finding4_install_rejects_registry_specs
 finding4_install_accepts_local_tgz
+finding4_verified_pack_handoff
 finding5_legitimate_npm_layout
 finding5_escaped_tmp_target
 finding5_escaped_exec_daemon_like
@@ -1216,6 +1344,9 @@ finding9_repo_npm_ci_uses_pinned_paths() {
 finding8_nodejs_prefix_ready
 finding8_node_rejected_before_exec
 finding8_prefix_hardened_rejects_user_tree
+finding8_reuse_gate_probes_nothing_unhardened
+finding8_hardened_rejects_scan_error
+finding8_wrapper_authenticates_prefix_before_exec
 finding8_pin_drift_node_prefix
 finding8_wrapper_accepts_pinned_pi
 finding9_wrapper_malicious_path_node
