@@ -5,6 +5,7 @@
 # Dependencias, caches y metadatos
 .git/
 .codegraph/
+.zvec-grep/
 node_modules/
 venv/
 env/
@@ -13,12 +14,12 @@ env/
 .pytest_cache/
 
 # Datos privados y archivos generados
-uploads/
-instance/
-private_imports/
-reports/generated/
+uploads/**
+instance/**
+private_imports/**
+reports/generated/**
 docs/architecture/*.html
-tests/tmp/
-tests/.tmp/
-references/90_archivo_no_usar/
+tests/tmp/**
+tests/.tmp/**
+references/90_archivo_no_usar/**
 repomix-output.*

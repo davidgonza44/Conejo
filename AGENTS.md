@@ -92,6 +92,27 @@ python scripts/test_prediction_readiness.py
 - Ponytail reinforces KISS/YAGNI and does not require repository scaffolding. Do not add a tool when an installed or native capability already covers the need.
 - RTK is undefined for this project. Do not assume Redux Toolkit or configure RTK until the user identifies the exact tool.
 
+### zg Phase 2B security exception
+
+**Decision: ADOPT WITH DOCUMENTED SECURITY EXCEPTION.** The approved evaluation rated utility **3/5** and privacy **PASS**. This exception is limited to `@zvec/zvec-grep@0.2.1`, the model `local/potion-code-16m-v2`, and text/code content through `npm run zg:index`.
+
+- Finding: `zg -> @huggingface/transformers@3.8.1 -> sharp@0.34.5` reaches `GHSA-f88m-g3jw-g9cj` (upstream severity: **High**; patched upstream in `sharp >=0.35.0`). The three High audit package entries derive from this single root GHSA.
+- Approved reachability: **NOT LOADED**. The allowed Potion Model2Vec text/code path does not load the Transformers.js image backend.
+- Image extraction, image processing, and multimodal indexing are prohibited. In `@zvec/zvec-grep@0.2.1`, only GIF, JPEG/JPG, PNG, and WebP can enter `ImageExtractor`; those raster formats are excluded by default unless explicitly selected. The approved command keeps the existing case-insensitive `--iglob` exclusions for those formats plus `.tif`/`.tiff`/`.vips` as defense in depth. SVG, AVIF, HEIC, and BMP are not ImageExtractor formats in 0.2.1 and do not reach the sharp/libvips image-processing path. `.repomixignore` remains the mandatory privacy boundary and is validated fail-closed (required exclusions present, no `!` re-inclusion) before either a missing-index pass or an existing-index check. Remote embeddings, multimodal operation, the Transformers.js backend, `--allow-remote`, API keys, any other model, and a `sharp` override are prohibited. Do not use `--hidden`, `--no-ignore`, or `zg install`; no supported upstream mitigation currently permits overriding to `sharp >=0.35.0`.
+- MCP is not currently approved; do not configure or use zg MCP.
+- A pre-existing `.zvec-grep/` index must pass `npm run zg:preflight` before use. Mismatch or unknown state blocks `npm run zg:index` and `npm run zg:status`. Rebuild, reset-paths, or drop require an explicit operator decision; never automatically repair an incompatible index.
+
+Require a new security review before use if any of these occurs:
+
+1. `@zvec/zvec-grep` changes from `0.2.1`.
+2. `@huggingface/transformers` or `sharp` changes.
+3. Another High or Critical GHSA appears.
+4. The embedding model changes.
+5. Image indexing or processing is enabled.
+6. Remote embeddings or multimodal operation is enabled.
+7. zg MCP configuration is attempted.
+8. An upstream zg release supports `sharp >=0.35.0`.
+
 ## Git workflow
 
 - Check Git status before work. Preserve pre-existing changes and never overwrite, stage, or commit someone else's work.
