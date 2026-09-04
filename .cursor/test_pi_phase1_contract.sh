@@ -1183,29 +1183,54 @@ finding8_reuse_gate_probes_nothing_unhardened() {
   rm -rf "$tmpdir"
 }
 
-finding8_hardened_rejects_scan_error() {
+finding8_hardened_ignores_path_find() {
   local tmpdir prefix bindir old_path
   tmpdir="$(mktemp -d)"
   prefix="${tmpdir}/node-${NODE_VERSION}"
-  write_ready_node_prefix "$prefix"
+  write_ready_node_prefix "$prefix" "v22.23.2" "10.9.8" "0" "0"
+  chmod 0777 "${prefix}/bin/node"
   bindir="${tmpdir}/fakebin"
   mkdir -p "$bindir"
   cat > "${bindir}/find" <<EOF
 #!/bin/sh
-echo "mock-find: Permission denied" >&2
-exit 1
+exit 0
 EOF
   chmod +x "${bindir}/find"
   old_path="$PATH"
   PATH="${bindir}:$PATH"
   if cloud_tools_pinned_nodejs_prefix_hardened "$prefix"; then
     PATH="$old_path"
-    record "hardened rejects prefix on scan error" "PASS" "FAIL"
+    record "hardened ignores hostile PATH find" "PASS" "FAIL"
   else
     PATH="$old_path"
-    record "hardened rejects prefix on scan error" "PASS" "PASS"
+    record "hardened ignores hostile PATH find" "PASS" "PASS"
+  fi
+  if grep -RnF '"$(find ' "${ROOT}/.cursor/install.sh" "${ROOT}/.cursor/pi-review.sh" >/dev/null; then
+    record "provenance scanners use absolute path" "PATH-resolved find" "/usr/bin/find"
+  elif grep -Fq '/usr/bin/find' "${ROOT}/.cursor/install.sh" \
+    && grep -Fq '/usr/bin/find' "${ROOT}/.cursor/pi-review.sh"; then
+    record "provenance scanners use absolute path" "PASS" "PASS"
+  else
+    record "provenance scanners use absolute path" "missing" "/usr/bin/find"
   fi
   rm -rf "$tmpdir"
+}
+
+finding_node_preload_hooks_cleared() {
+  local file unset_line exec_line
+  for file in "${ROOT}/.cursor/install.sh" "${ROOT}/.cursor/pi-review.sh"; do
+    unset_line="$(grep -n '^unset NODE_OPTIONS NODE_PATH$' "$file" | head -n 1 | cut -d: -f1)"
+    exec_line="$(grep -nE '"\$(prefix_node|node_bin|PI_PINNED_NODE)"' "$file" | head -n 1 | cut -d: -f1)"
+    if [ -z "$unset_line" ]; then
+      record "loader hooks cleared before pinned Node ($file)" "no unset" "unset"
+    elif grep -nE '(export )?(NODE_OPTIONS|NODE_PATH)=' "$file" >/dev/null; then
+      record "loader hooks cleared before pinned Node ($file)" "re-exported" "unset-only"
+    elif [ -z "$exec_line" ] || [ "$unset_line" -lt "$exec_line" ]; then
+      record "loader hooks cleared before pinned Node ($file)" "PASS" "PASS"
+    else
+      record "loader hooks cleared before pinned Node ($file)" "unset=${unset_line} exec=${exec_line}" "unset<exec"
+    fi
+  done
 }
 
 finding8_wrapper_authenticates_prefix_before_exec() {
@@ -1345,8 +1370,9 @@ finding8_nodejs_prefix_ready
 finding8_node_rejected_before_exec
 finding8_prefix_hardened_rejects_user_tree
 finding8_reuse_gate_probes_nothing_unhardened
-finding8_hardened_rejects_scan_error
+finding8_hardened_ignores_path_find
 finding8_wrapper_authenticates_prefix_before_exec
+finding_node_preload_hooks_cleared
 finding8_pin_drift_node_prefix
 finding8_wrapper_accepts_pinned_pi
 finding9_wrapper_malicious_path_node

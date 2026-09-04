@@ -20,6 +20,11 @@
 #   bash .cursor/install.sh --cloud-tools-only
 set -euo pipefail
 
+# Node loader hooks must never reach pinned invocations: an ambient
+# NODE_OPTIONS (--require/--import) or NODE_PATH would load attacker
+# JavaScript into the trusted Node process before any CLI runs.
+unset NODE_OPTIONS NODE_PATH
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
@@ -175,9 +180,11 @@ cloud_tools_install_release_binary() {
 
   tar -xzf "$archive_path" -C "$tmpdir"
   local extracted
-  extracted="$(find "$tmpdir" -type f -name "$name" -perm -u+x | head -n 1)"
+  # Absolute scanner: its result feeds sudo install, so a PATH-resolved find
+  # must not select the binary.
+  extracted="$(/usr/bin/find "$tmpdir" -type f -name "$name" -perm -u+x | head -n 1)"
   if [ -z "$extracted" ]; then
-    extracted="$(find "$tmpdir" -type f -name "$name" | head -n 1)"
+    extracted="$(/usr/bin/find "$tmpdir" -type f -name "$name" | head -n 1)"
   fi
   if [ -z "$extracted" ] || [ ! -f "$extracted" ]; then
     cloud_tools_fail "El archivo ${archive} no contiene el binario ${name}"
@@ -226,8 +233,11 @@ cloud_tools_prefix_scan_clean() {
   local prefix="$1"
   shift
   local hits rc
+  # Absolute scanner: a PATH-resolved find could be attacker-controlled and
+  # report a hostile prefix as clean.
+  [ -x /usr/bin/find ] || return 1
   rc=0
-  hits="$(find "$prefix" "$@" -print)" || rc=$?
+  hits="$(/usr/bin/find "$prefix" "$@" -print)" || rc=$?
   [ "$rc" -eq 0 ] && [ -z "$hits" ]
 }
 

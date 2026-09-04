@@ -7,6 +7,11 @@
 # Nunca se exponen bash, write ni edit.
 set -euo pipefail
 
+# Node loader hooks must never reach the pinned CLI: an ambient NODE_OPTIONS
+# (--require/--import) or NODE_PATH would load attacker JavaScript into the
+# trusted Node process before the authenticated CLI runs.
+unset NODE_OPTIONS NODE_PATH
+
 PI_PACKAGE="@earendil-works/pi-coding-agent"
 PI_EXPECTED_VERSION="0.84.4"
 PI_READONLY_TOOLS="read,grep,find,ls"
@@ -42,8 +47,11 @@ pi_review_scan_clean() {
   local prefix="$1"
   shift
   local hits rc
+  # Absolute scanner: a PATH-resolved find could be attacker-controlled and
+  # report a hostile prefix as clean.
+  [ -x /usr/bin/find ] || return 1
   rc=0
-  hits="$(find "$prefix" "$@" -print)" || rc=$?
+  hits="$(/usr/bin/find "$prefix" "$@" -print)" || rc=$?
   [ "$rc" -eq 0 ] && [ -z "$hits" ]
 }
 
