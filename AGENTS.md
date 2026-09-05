@@ -34,6 +34,47 @@ Flask route -> controller -> service -> SQLAlchemy model -> MySQL
 7. Do not hardcode mockup metrics, inventory, sales, names, dates, forecasts, or statuses. Visible data must come from the backend or a truthful application state.
 8. Never add `try`/`catch` or `try`/`except` around imports.
 
+## Code quality guardrails
+
+Apply these limits to newly created or materially modified handwritten code.
+Do not refactor unrelated legacy code solely to satisfy a metric.
+
+- Cyclomatic complexity: <= 20 per function or method; prefer <= 10.
+- Cognitive complexity: <= 15 per function or method.
+- Halstead difficulty: < 80 is a review signal, not an automatic failure.
+- Source files should normally remain <= 500 logical lines.
+  Do not split cohesive files merely to satisfy this number.
+- Introduce no demonstrably dead code.
+- Introduce no demonstrably redundant code.
+- Prefer simplification over adding abstractions solely to reduce a metric.
+- Metric compliance must not override KISS, YAGNI, architecture boundaries,
+  correctness, authorization, or existing behavior.
+
+### CRAP score
+
+Do not enforce CRAP as a hard gate until reliable per-function test coverage
+exists.
+
+Once reliable coverage infrastructure is established:
+
+- Target CRAP < 30 for newly created or materially modified functions.
+- Tighten the target to CRAP < 25 once the test suite and coverage reporting
+  are mature.
+- Do not refactor unrelated legacy code solely to reduce CRAP.
+
+### Type safety
+
+The current frontend uses native JavaScript, not TypeScript. Do not introduce
+TypeScript solely to satisfy these rules.
+
+If TypeScript is introduced in an explicitly approved future change:
+
+- No implicit `any`.
+- Avoid explicit `any`; allow it only at a justified interoperability boundary
+  when a safer type cannot reasonably express the contract.
+- `unknown` is allowed when semantically appropriate and must be narrowed
+  before use.
+
 ## Visual source and accessibility
 
 - Use `references/` as the approved visual direction and read `references/README.md` plus `references/MANIFEST.csv` before implementing a referenced screen.
