@@ -17,7 +17,10 @@
   "devDependencies": {
     "@fission-ai/openspec": "1.10.0",
     "@lzehrung/codegraph": "^2.3.10",
+    "@playwright/test": "^1.63.0",
+    "@tailwindcss/cli": "^4.3.3",
     "@zvec/zvec-grep": "0.2.1",
-    "repomix": "^1.18.0"
+    "repomix": "^1.18.0",
+    "tailwindcss": "^4.3.3"
   }
 }

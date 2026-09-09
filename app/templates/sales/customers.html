@@ -1,0 +1,43 @@
+{% extends "sales/_page.html" %}
+{# Clientes desde Ventas (panel "7. Clientes (desde Ventas)"): búsqueda, acción "Nuevo cliente"
+   y tabla de clientes del fixture. El módulo de clientes real no existe todavía en el backend;
+   en modo normal la vista lo indica en lugar de fabricar datos. #}
+{% set active_page = "sales_customers" %}
+
+{% block title %}Clientes — Ventas{% endblock %}
+
+{% block main_class %} iv-page sa-page sa-list-page sa-customers-page{% endblock %}
+
+{% block main %}
+{{ sa.header("Clientes", "Consulta tus clientes y su información.",
+             fixture.search_placeholder if fixture else "", reference_mode=reference_mode) }}
+
+{% if not fixture %}
+{{ sa.unavailable("Clientes") }}
+{% else %}
+{{ sa.toolbar(fixture.search, fixture.primary, filter_icon=None) }}
+
+<section class="ix-card sa-table-card" aria-label="Clientes registrados">
+    <div class="px-table-wrap sa-table-wrap">
+        <table class="px-table sa-table sa-list-table sa-customers-table">
+            <colgroup><col style="width: 237px"><col style="width: 139px"><col style="width: 150px"><col style="width: 257px"><col></colgroup>
+            <thead>
+                <tr>{% for c in fixture.columns %}<th scope="col">{{ c }}</th>{% endfor %}</tr>
+            </thead>
+            <tbody>
+                {% for name, rif, phone, email, status in fixture.rows %}
+                <tr>
+                    <td><span class="sa-ref">{{ name }}</span></td>
+                    <td class="sa-muted">{{ rif }}</td>
+                    <td class="sa-muted">{{ phone }}</td>
+                    <td class="sa-muted">{{ email }}</td>
+                    <td>{{ sa.badge(status) }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {{ sa.pagination(fixture.pagination) }}
+</section>
+{% endif %}
+{% endblock %}

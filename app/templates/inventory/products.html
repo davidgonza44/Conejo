@@ -1,0 +1,136 @@
+{% extends "inventory/_page.html" %}
+{# Gestión de Productos (modo referencia): shell "ix" de Inventario. Solo se renderiza en
+   debug con ?ref=1 (ver pages.products); en modo normal /products conserva products.html. #}
+{% import "predictive/_macros.html" as px %}
+{% import "inventory/_macros.html" as iv %}
+{% set active_page = "products" %}
+{% set branch_sub = None %}
+
+{% block title %}Gestión de Productos — Inventario{% endblock %}
+
+{% block main_class %} iv-page iv-prod-page{% endblock %}
+
+{% block head %}
+{{ super() }}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/ix_product_drawer.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/ix_product_layers.css') }}">
+{% endblock %}
+
+{% block scripts %}
+{{ super() }}
+{% include "inventory/_product_drawer.html" %}
+<script src="{{ url_for('static', filename='js/ix_product_drawer.js') }}"></script>
+{% include "inventory/_product_layers.html" %}
+<script src="{{ url_for('static', filename='js/ix_product_layers.js') }}"></script>
+{% endblock %}
+
+{% block main %}
+{{ iv.header("Gestión de Productos", "Administra catálogo, stock y precios",
+             fixture.search_placeholder, reference_mode=reference_mode) }}
+
+<div class="iv-toolbar iv-prod-toolbar">
+    <label class="px-search iv-toolbar-search">
+        <i class="ti ti-search" aria-hidden="true"></i>
+        <input type="search" placeholder="{{ fixture.search }}" aria-label="{{ fixture.search }}">
+    </label>
+    <div class="px-actions iv-toolbar-actions">{{ iv.buttons(fixture.actions) }}</div>
+</div>
+
+<form class="ix-card iv-mov-filters iv-prod-filters" role="search" aria-label="Filtros" onsubmit="return false;">
+    {% for label, value in fixture.filters.inline %}
+    <label class="iv-inline-select">
+        <span class="iv-inline-label">{{ label }}</span>
+        <span class="px-select-box"><span>{{ value }}</span><i class="ti ti-chevron-down" aria-hidden="true"></i></span>
+    </label>
+    {% endfor %}
+    <button type="reset" class="px-clear"><i class="ti ti-refresh" aria-hidden="true"></i>{{ fixture.filters["clear"] }}</button>
+</form>
+
+{{ iv.kpis(fixture.kpis) }}
+
+<section class="iv-prod-body" aria-label="Catálogo, categorías y alertas">
+    <article class="ix-card iv-catalog">
+        {{ iv.card_head(fixture.catalog.title, fixture.catalog.link) }}
+        <div class="px-table-wrap iv-table-wrap">
+            <table class="px-table iv-table iv-catalog-table">
+                <colgroup>
+                    <col style="width: 53px"><col style="width: 76px"><col style="width: 175px"><col style="width: 127px">
+                    <col style="width: 81px"><col style="width: 56px"><col style="width: 97px"><col style="width: 133px"><col>
+                </colgroup>
+                <thead>
+                    <tr>{% for c in fixture.catalog.columns %}<th scope="col">{{ c }}</th>{% endfor %}</tr>
+                </thead>
+                <tbody>
+                    {% for r in fixture.catalog.rows %}
+                    <tr>
+                        <td><span class="ix-thumb iv-catalog-thumb"><img src="{{ url_for('static', filename=r.product.thumb) }}" alt=""></span></td>
+                        <td class="iv-code">{{ r.code }}</td>
+                        <td>
+                            <span class="px-product-text">
+                                <span class="px-product-name">{{ r.product.name }}</span>
+                                <span class="px-product-sku">{{ r.brand }}</span>
+                            </span>
+                        </td>
+                        <td class="px-cell-muted">{{ r.category }}</td>
+                        <td class="iv-price">{{ r.price }}</td>
+                        <td><strong class="iv-num is-{{ r.stock_tone }}">{{ r.stock }}</strong></td>
+                        <td><span class="px-badge iv-badge-dot is-{{ r.status[1] }}">{{ r.status[0] }}</span></td>
+                        <td class="px-cell-muted">{{ r.updated }}</td>
+                        <td>{{ iv.row_actions() }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {{ px.pagination(fixture.catalog.pagination) }}
+    </article>
+
+    <div class="iv-prod-aside">
+        <article class="ix-card iv-cat-summary">
+            {{ iv.card_head(fixture.categories.title, fixture.categories.link) }}
+            <ul class="iv-cat-rows">
+                {% for name, count, pct, width in fixture.categories.rows %}
+                <li>
+                    <span class="iv-cat-row-name">{{ name }}</span>
+                    <span class="iv-cat-row-num">{{ count }}</span>
+                    <span class="iv-cat-row-num">{{ pct }}</span>
+                    <span class="px-bar iv-bar iv-cat-bar" aria-hidden="true"><span style="width: {{ width }}%"></span></span>
+                </li>
+                {% endfor %}
+            </ul>
+        </article>
+
+        <article class="ix-card iv-alerts iv-prod-alerts">
+            {{ iv.card_head(fixture.alerts.title, fixture.alerts.link) }}
+            <ul class="iv-alert-list">
+                {% for p, stock, badge in fixture.alerts.rows %}
+                <li>
+                    <span class="iv-alert-icon is-{{ badge[1] }}" aria-hidden="true">{{ iv.icon("svg:alert-triangle" if badge[1] == "orange" else "svg:x-circle") }}</span>
+                    <span class="ix-thumb iv-alert-thumb"><img src="{{ url_for('static', filename=p.thumb) }}" alt=""></span>
+                    <span class="ix-row-text">
+                        <span class="ix-row-title">{{ p.name }}</span>
+                        <span class="ix-row-desc">{{ stock }}</span>
+                    </span>
+                    {{ px.badge(badge) }}
+                </li>
+                {% endfor %}
+            </ul>
+        </article>
+
+        <article class="ix-card iv-recent">
+            {{ iv.card_head(fixture.recent.title, fixture.recent.link) }}
+            <div class="iv-recent-row">
+                <span class="ix-thumb iv-recent-thumb"><img src="{{ url_for('static', filename=fixture.recent.product.thumb) }}" alt=""></span>
+                <span class="ix-row-text">
+                    <span class="ix-row-title">{{ fixture.recent.product.name }}</span>
+                    <span class="ix-row-desc">{{ fixture.recent.code }}</span>
+                </span>
+                <span class="ix-row-side">
+                    <span class="iv-recent-stock">{{ fixture.recent.stock }}</span>
+                    <span class="ix-row-time">{{ fixture.recent.when }}</span>
+                </span>
+            </div>
+        </article>
+    </div>
+</section>
+{% endblock %}

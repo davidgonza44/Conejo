@@ -1,0 +1,87 @@
+{% extends "predictive/_page.html" %}
+{% import "predictive/_macros.html" as px %}
+{% set active_page = "demand_forecast" %}
+{% set compras_open = reference_mode %}
+
+{% block title %}Pronóstico de demanda — Análisis predictivo{% endblock %}
+
+{% block main %}
+{{ px.header("Pronóstico de demanda",
+             "Predice la demanda futura y toma mejores decisiones de abastecimiento",
+             None, fixture.search_placeholder if fixture else "", "Actualizar modelo", reference_mode=reference_mode) }}
+
+{% if not fixture %}
+{{ px.unavailable("Pronóstico de demanda") }}
+{% else %}
+<div class="px-forecast" style="--px-kpi-cols: 1fr 1fr 1fr 1.3fr">
+{{ px.kpis(fixture.kpis) }}
+{{ px.filters(fixture.filters) }}
+
+<div class="px-body is-from-filters" style="--px-aside: 325px; column-gap: 20px">
+    <div class="px-main">
+        <section class="ix-card px-table-card is-forecast" aria-labelledby="forecast-title">
+            <div class="px-card-head">
+                <h2 class="px-card-title" id="forecast-title">{{ fixture.table_title }}</h2>
+                <a href="#" class="ix-link-btn" aria-disabled="true">Ver todos los productos</a>
+            </div>
+            <div class="px-table-wrap">
+                <table class="px-table is-tall">
+                    <colgroup>
+                        <col style="width: 234px"><col style="width: 102px"><col style="width: 102px"><col style="width: 156px">
+                        <col style="width: 97px"><col style="width: 137px"><col>
+                    </colgroup>
+                    <thead>
+                        <tr>
+                            <th scope="col">Producto</th>
+                            <th scope="col">Categoría</th>
+                            <th scope="col">Stock actual</th>
+                            <th scope="col">Demanda estimada<br><span class="px-th-sub">Próx. 30 días</span></th>
+                            <th scope="col">Riesgo</th>
+                            <th scope="col">Sugerencia</th>
+                            <th scope="col" class="is-actions">Acciones</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for r in fixture.rows %}
+                        <tr>
+                            <td>{{ px.product_cell(r.p) }}</td>
+                            <td>{{ r.cat }}</td>
+                            <td><span class="px-cell-2"><strong>{{ r.stock }}</strong><small class="tone-{{ r.stock_state[1] }}">{{ r.stock_state[0] }}</small></span></td>
+                            <td><span class="px-cell-2"><strong>{{ r.demand }}</strong><small>{{ r.delta }}</small></span></td>
+                            <td><span class="px-cell-2">{{ px.badge(r.risk) }}<small>{{ r.risk_note }}</small></span></td>
+                            <td><span class="px-cell-2">{% if r.buy %}<strong>{{ r.buy }}</strong><small>{{ r.when }}</small>{% else %}<span class="px-cell-muted">{{ r.when }}</span>{% endif %}</span></td>
+                            <td class="is-actions">{{ px.actions_cell() }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {{ px.pagination(fixture.pagination) }}
+        </section>
+    </div>
+
+    <aside class="px-aside" aria-label="Resumen del pronóstico">
+        {{ px.donut_card(fixture.donut, "forecast-donut", "is-short") }}
+        <article class="ix-card px-aside-card px-top is-compact">
+            <h2 class="px-card-title">{{ fixture.top.title }}</h2>
+            <span class="px-toggle" role="group" aria-label="Horizonte">
+                {% for label in fixture.top.toggle %}<span{% if loop.first %} class="is-active"{% endif %}>{{ label }}</span>{% endfor %}
+            </span>
+            <ol class="px-top-list">
+                {% for name, pct, value in fixture.top.rows %}
+                <li>
+                    <span class="px-top-rank">{{ loop.index }}</span>
+                    <span class="px-top-name">{{ name }}</span>
+                    <span class="px-bar" aria-hidden="true"><span style="width: {{ pct }}%"></span></span>
+                    <span class="px-top-value">{{ value }}</span>
+                </li>
+                {% endfor %}
+            </ol>
+            <a href="#" class="px-link" aria-disabled="true">{{ fixture.top.link }}</a>
+        </article>
+        {{ px.model_info_card(fixture.model_info, with_icon=False) }}
+    </aside>
+</div>
+</div>
+{% endif %}
+{% endblock %}

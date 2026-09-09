@@ -1,0 +1,129 @@
+{% extends "inventory/_page.html" %}
+{% import "predictive/_macros.html" as px %}
+{% import "inventory/_macros.html" as iv %}
+{% set active_page = "inventory" %}
+{% set branch_sub = None %}
+
+{% block title %}Movimientos de Inventario — Inventario{% endblock %}
+{% block head %}
+{{ super() }}
+{% if reference_mode %}<link rel="stylesheet" href="{{ url_for('static', filename='css/ix_movement_layers.css') }}">{% endif %}
+{% endblock %}
+{% block scripts %}
+{{ super() }}
+{% if reference_mode %}<script src="{{ url_for('static', filename='js/ix_movement_layers.js') }}"></script><script src="{{ url_for('static', filename='js/ix_movement_filters.js') }}"></script>{% endif %}
+{% endblock %}
+
+{% block main %}
+{{ iv.header("Movimientos de Inventario", "Registro de entradas, salidas, ajustes y transferencias",
+             fixture.search_placeholder, reference_mode=reference_mode) }}
+
+<div class="iv-toolbar">
+    <label class="px-search iv-toolbar-search">
+        <i class="ti ti-search" aria-hidden="true"></i>
+        <input type="search" placeholder="{{ fixture.search }}" aria-label="{{ fixture.search }}">
+    </label>
+    <div class="px-actions iv-toolbar-actions">{{ iv.buttons(fixture.actions) }}</div>
+</div>
+
+<form class="ix-card iv-mov-filters" role="search" aria-label="Filtros" onsubmit="return false;">
+    {% for label, value in fixture.filters.inline %}
+    <label class="iv-inline-select">
+        <span class="iv-inline-label">{{ label }}</span>
+        <span class="px-select-box"><span>{{ value }}</span><i class="ti ti-chevron-down" aria-hidden="true"></i></span>
+    </label>
+    {% endfor %}
+    {% for label, value in fixture.filters.stacked %}
+    <label class="px-select iv-stacked-select">
+        <span class="px-select-label">{{ label }}</span>
+        <span class="px-select-box"><span>{{ value }}</span><i class="ti ti-chevron-down" aria-hidden="true"></i></span>
+    </label>
+    {% endfor %}
+    <label class="px-select iv-stacked-select is-date">
+        <span class="px-select-label">{{ fixture.filters.date[0] }}</span>
+        <span class="px-select-box"><i class="ti ti-calendar" aria-hidden="true"></i><span>{{ fixture.filters.date[1] }}</span></span>
+    </label>
+    <button type="reset" class="px-clear"><i class="ti ti-refresh" aria-hidden="true"></i>{{ fixture.filters["clear"] }}</button>
+</form>
+
+{{ iv.kpis(fixture.kpis) }}
+
+<section class="iv-mov-body" aria-label="Historial y resumen de movimientos">
+    <article class="ix-card iv-history">
+        {{ iv.card_head(fixture.history.title) }}
+        <div class="px-table-wrap iv-table-wrap">
+            <table class="px-table iv-table iv-history-table">
+                <colgroup>
+                    <col style="width: 76px"><col style="width: 70px"><col style="width: 62px"><col style="width: 178px">
+                    <col style="width: 54px"><col style="width: 62px"><col style="width: 66px"><col style="width: 94px">
+                    <col style="width: 90px"><col style="width: 66px"><col>
+                </colgroup>
+                <thead>
+                    <tr>{% for c in fixture.history.columns %}<th scope="col"{% if loop.index in (5, 6, 7, 10, 11) %} class="is-center"{% endif %}>{{ c }}</th>{% endfor %}</tr>
+                </thead>
+                <tbody>
+                    {% for m in fixture.history.rows %}
+                    <tr data-movement-ref="{{ m.ref }}">
+                        <td><span class="iv-date">{{ m.date }}</span><span class="iv-time">{{ m.time }}</span></td>
+                        <td>{{ px.badge(m.kind) }}</td>
+                        <td class="iv-ref">{{ m.ref }}</td>
+                        <td>{{ iv.product(m.product, sku=True) }}</td>
+                        <td class="is-center"><strong class="iv-num is-{{ m.qty_tone }}">{{ m.qty }}</strong></td>
+                        <td class="is-center">{{ m.before }}</td>
+                        <td class="is-center"><strong class="iv-num is-{{ m.after_tone }}">{{ m.after }}</strong></td>
+                        <td class="px-cell-muted">{{ m.branch }}</td>
+                        <td class="px-cell-muted">{{ m.user }}</td>
+                        <td class="is-center">{{ px.badge(m.status) }}</td>
+                        <td class="is-center"><div class="iv-row-actions">
+                            <button type="button" class="iv-icon-btn" aria-label="Ver detalle" title="Ver detalle"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg></button>
+                        </div></td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {{ px.pagination(fixture.history.pagination) }}
+    </article>
+
+    <div class="iv-mov-aside">
+        <article class="ix-card iv-type-card">
+            {{ iv.card_head(fixture.donut.title) }}
+            <div class="iv-type-body">
+                <div class="iv-donut iv-donut-sm" data-donut='{{ fixture.donut["items"] | map(attribute=3) | list | tojson }}' data-tones='{{ fixture.donut["items"] | map(attribute=2) | list | tojson }}' data-cutout="58">
+                    <canvas role="img" aria-label="{{ fixture.donut.title }}"></canvas>
+                    <div class="ix-donut-center">
+                        <span class="ix-donut-value">{{ fixture.donut.center_value }}</span>
+                        <span class="ix-donut-label">{{ fixture.donut.center_label }}</span>
+                    </div>
+                </div>
+                <ul class="iv-type-legend">
+                    {% for name, (count, pct), tone, _ in fixture.donut["items"] %}
+                    <li><span class="ix-legend-dot iv-dot-{{ tone }}"></span><span class="iv-type-name">{{ name }}</span><span class="iv-type-value"><strong>{{ count }}</strong> {{ pct }}</span></li>
+                    {% endfor %}
+                </ul>
+            </div>
+        </article>
+
+        <article class="ix-card iv-activity iv-mov-activity">
+            {{ iv.card_head(fixture.activity.title) }}
+            <ul class="ix-list iv-activity-list">
+                {% for ico, tone, title, desc, time, amount, direction in fixture.activity.rows %}
+                <li class="ix-row">
+                    <span class="ix-row-icon tone-{{ tone }}" aria-hidden="true">{{ iv.icon(ico) }}</span>
+                    <span class="ix-row-text">
+                        <span class="ix-row-title">{{ title }}</span>
+                        <span class="ix-row-desc">{{ desc }}</span>
+                    </span>
+                    <span class="ix-row-side">
+                        <span class="ix-row-time">{{ time }}</span>
+                        <span class="ix-row-amount is-{{ direction }}">{{ amount }}</span>
+                    </span>
+                </li>
+                {% endfor %}
+            </ul>
+            <button type="button" class="iv-activity-more mv-activity-trigger" data-mv-open="activities">{{ fixture.activity.link }}</button>
+        </article>
+    </div>
+</section>
+{% if reference_mode %}{% include 'inventory/_movement_layers.html' %}{% endif %}
+{% endblock %}

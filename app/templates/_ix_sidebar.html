@@ -1,0 +1,206 @@
+{# Sidebar compartido del shell "ix" (Inicio y Análisis predictivo).
+
+   Variables:
+   - reference_mode: True en debug con ?ref=1 (navegación de la maqueta, sin destinos reales
+     salvo las pantallas ya implementadas, que conservan ?ref=1).
+   - active_page: clave de la pantalla actual.
+   - sidebar_variant: "inicio" reproduce 01_inicio.png; "predictive" reproduce el sidebar de
+     04_analisis_predictivo (grupo Análisis predictivo desplegado); "inventory" reproduce el
+     sidebar de las referencias de Inventario (grupo Inventario desplegado y teñido, con
+     Análisis predictivo también desplegado); "reports" reproduce el sidebar de Dashboard de
+     Reportes (Reportes activo, grupos Inventario y Análisis predictivo plegados); "sales"
+     reproduce el sidebar del collage de Ventas (grupo Ventas desplegado con destinos reales,
+     Inventario y Análisis predictivo plegados pero con sus destinos intactos).
+   - compras_open: True solo cuando la referencia muestra el grupo Compras desplegado.
+   - branch_sub: texto secundario de la tarjeta de sucursal (None = una sola línea). #}
+{% set ref_qs = "?ref=1" if reference_mode else "" %}
+{% set sales_href = url_for("pages.sales") ~ ref_qs %}
+{% set sales_children = [
+    ("sales_new", "Nueva venta", url_for("pages.sales_new") ~ ref_qs),
+    ("sales_quotes", "Cotizaciones", url_for("pages.sales_quotes") ~ ref_qs),
+    ("sales_orders", "Pedidos", url_for("pages.sales_orders") ~ ref_qs),
+    ("sales_customers", "Clientes", url_for("pages.sales_customers") ~ ref_qs),
+] %}
+{% set pred_children = [
+    ("demand_forecast", "Pronóstico de demanda", url_for("pages.demand_forecast") ~ ref_qs),
+    ("replenishment", "Reabastecimiento", url_for("pages.replenishment") ~ ref_qs),
+    ("critical_products", "Productos críticos", url_for("pages.critical_products") ~ ref_qs),
+    ("trends", "Tendencias", url_for("pages.trends") ~ ref_qs),
+    ("model_accuracy", "Precisión del modelo", url_for("pages.model_accuracy") ~ ref_qs),
+] %}
+{% set pred_active = active_page in (pred_children | map(attribute=0) | list) %}
+{% set inv_children = [
+    ("inventory_summary", "Resumen", url_for("pages.inventory_summary") ~ ref_qs),
+    ("products", "Productos", url_for("pages.products") ~ ref_qs),
+    ("categories", "Categorías", url_for("pages.categories") ~ ref_qs),
+    ("suppliers", "Proveedores", url_for("pages.suppliers") ~ ref_qs),
+    ("inventory", "Movimientos", url_for("pages.inventory") ~ ref_qs),
+] %}
+{% if branch_sub is not defined %}
+{% set branch_sub = "Av. Bolívar, Valencia" if sidebar_variant in ("predictive", "sales", "settings") else None %}
+{% endif %}
+
+{% set notification_sidebar = sidebar_variant == 'settings' and tab is defined and tab == 'notifications' %}
+{% set account_sidebar = sidebar_variant == 'settings' and tab is defined and tab in ('users', 'security', 'backup') %}
+{% set lucide_sidebar = notification_sidebar or account_sidebar or report_sales_shell|default(false) %}
+{% macro sidebar_icon(name) %}{% if lucide_sidebar %}{{ st.icon({'ti-home':'home','ti-package':'boxes','ti-shopping-cart':'cart','ti-shopping-bag':'bag','ti-users':'users','ti-chart-line':'chart','ti-chart-bar':'chart','ti-settings':'settings'}.get(name,'settings')) }}{% else %}<i class="ti {{ name }}"></i>{% endif %}{% endmacro %}
+{% macro nav_link(href, icon, label, current=False, chevron=None) %}
+<li><a href="{{ href }}" {% if current %}aria-current="page"{% elif href == "#" %}aria-disabled="true"{% endif %}>{{ sidebar_icon(icon) }}{{ label }}{% if chevron %}<i class="ti ti-chevron-{{ chevron }} ix-nav-chevron" aria-hidden="true">{% if lucide_sidebar %}{{ st.icon("chevron") }}{% endif %}</i>{% endif %}</a></li>
+{% endmacro %}
+
+{# soft=True: cabecera azul sin fondo propio (Inventario y Análisis predictivo en las referencias
+   de Inventario); tinted=True: todo el grupo sobre un fondo apenas teñido; href: la cabecera
+   navega a esa ruta (Ventas) en lugar de plegar/desplegar el grupo. #}
+{% macro nav_group(id, icon, label, children, open, active_child=None, soft=False, tinted=False, href=None) %}
+<li class="ix-nav-group{{ ' is-open' if open }}{{ ' is-soft' if soft }}{{ ' is-tinted' if tinted and open }}">
+    {% if href %}
+    <a href="{{ href }}" class="ix-nav-group-link{{ ' is-active' if open }}"{% if open and not active_child %} aria-current="page"{% endif %}>
+        {{ sidebar_icon(icon) }}{{ label }}<i class="ti ti-chevron-{{ 'up' if open else 'right' }} ix-nav-chevron" aria-hidden="true">{% if lucide_sidebar %}{{ st.icon("chevron") }}{% endif %}</i>
+    </a>
+    {% else %}
+    <button type="button" class="{{ 'is-active' if open }}" aria-expanded="{{ 'true' if open else 'false' }}" aria-controls="{{ id }}">
+        {{ sidebar_icon(icon) }}{{ label }}<i class="ti ti-chevron-{{ 'up' if open else 'right' }} ix-nav-chevron" aria-hidden="true">{% if lucide_sidebar %}{{ st.icon("chevron") }}{% endif %}</i>
+    </button>
+    {% endif %}
+    <ul id="{{ id }}" class="ix-nav-children"{% if not open %} hidden{% endif %}>
+        {% for key, text, href in children %}
+        <li><a href="{{ href }}" {% if key == active_child %}aria-current="page"{% elif href == "#" %}aria-disabled="true"{% endif %}>{{ text }}</a></li>
+        {% endfor %}
+    </ul>
+</li>
+{% endmacro %}
+
+<aside class="ix-sidebar{% if sidebar_variant %} is-{{ sidebar_variant }}{% endif %}{{ " is-notifications" if notification_sidebar }}{{ " is-account is-" ~ tab if account_sidebar }}" id="ix-sidebar" aria-label="Navegación principal">
+    <a href="/dashboard{{ ref_qs }}" class="ix-brand">
+        {% if reference_mode %}
+        <span class="ix-brand-logo" aria-hidden="true"><i class="ti ti-tool">{% if lucide_sidebar %}{{ st.icon("wrench") }}{% endif %}</i></span>
+        <span class="ix-brand-text">
+            <span class="ix-brand-name">Ferretería Pro</span>
+            <span class="ix-brand-sub">Sistema de Gestión</span>
+        </span>
+        {% else %}
+        <span class="ix-brand-logo is-image">
+            <img src="{{ url_for('static', filename='img/logo_oficial_el_conejo.png') }}"
+                 alt="Logo de Ferretería y Construcciones El Conejo C.A.">
+        </span>
+        <span class="ix-brand-text">
+            <span class="ix-brand-name">El Conejo C.A.</span>
+            <span class="ix-brand-sub">Ferretería y Construcciones</span>
+        </span>
+        {% endif %}
+    </a>
+
+    <nav class="ix-nav">
+        <ul>
+            {{ nav_link("/dashboard" ~ ref_qs, "ti-home", "Inicio", current=(active_page == "dashboard")) }}
+            {% if reference_mode %}
+            {# Modo de referencia visual: navegación de la maqueta, sin destino. #}
+            {% if sidebar_variant == "inventory" %}
+            {{ nav_group("ix-nav-inv", "ti-package", "Inventario", inv_children, True, active_page, soft=True, tinted=True) }}
+            {{ nav_link(sales_href, "ti-shopping-cart", "Ventas", chevron="right") }}
+            {{ nav_link("#", "ti-shopping-bag", "Compras", chevron="right") }}
+            {{ nav_link("#", "ti-users", "Clientes", chevron="right") }}
+            {{ nav_group("ix-nav-pred", "ti-chart-line", "Análisis predictivo", pred_children, True, active_page, soft=True) }}
+            {% elif sidebar_variant in ("reports", "settings") %}
+            {# Dashboard de Reportes: grupos plegados con destinos reales; Reportes activo. #}
+            {{ nav_group("ix-nav-inv", "ti-package", "Inventario", inv_children, False) }}
+            {{ nav_link(sales_href, "ti-shopping-cart", "Ventas", chevron="right") }}
+            {{ nav_link("#", "ti-shopping-bag", "Compras", chevron="right") }}
+            {{ nav_link("#", "ti-users", "Clientes", chevron="right") }}
+            {{ nav_group("ix-nav-pred", "ti-chart-line", "Análisis predictivo", pred_children, sidebar_variant == "settings" and not notification_sidebar) }}
+            {% elif sidebar_variant == "sales" %}
+            {# Módulo Ventas: grupo Ventas desplegado (la cabecera navega al dashboard de ventas);
+               Inventario y Análisis predictivo plegados con sus destinos reales. #}
+            {{ nav_group("ix-nav-inv", "ti-package", "Inventario", inv_children, False) }}
+            {{ nav_group("ix-nav-sales", "ti-shopping-cart", "Ventas", sales_children, True, active_page, href=sales_href) }}
+            {{ nav_link("#", "ti-shopping-bag", "Compras") }}
+            {{ nav_link("#", "ti-users", "Clientes") }}
+            {{ nav_group("ix-nav-pred", "ti-chart-line", "Análisis predictivo", pred_children, False) }}
+            {% else %}
+            {{ nav_group("ix-nav-inv", "ti-package", "Inventario", inv_children, False) }}
+            {{ nav_link(sales_href, "ti-shopping-cart", "Ventas", chevron="right") }}
+            {% if sidebar_variant == "predictive" %}
+            {{ nav_group("ix-nav-compras", "ti-shopping-bag", "Compras",
+                         [("orders", "Órdenes de compra", "#"), ("suppliers", "Proveedores", "#"), ("receipts", "Recepciones", "#")],
+                         compras_open) }}
+            {{ nav_link("#", "ti-users", "Clientes") }}
+            {{ nav_group("ix-nav-pred", "ti-chart-line", "Análisis predictivo", pred_children, True, active_page) }}
+            {% else %}
+            {{ nav_link("#", "ti-shopping-bag", "Compras", chevron="right") }}
+            {{ nav_link("#", "ti-users", "Clientes", chevron="right") }}
+            {{ nav_group("ix-nav-pred", "ti-chart-line", "Análisis predictivo", pred_children, False) }}
+            {% endif %}
+            {% endif %}
+            {{ nav_link(url_for("pages.report_sales") ~ ref_qs, "ti-chart-bar", "Reportes", current=(active_page == "reports"),
+                        chevron=(None if active_page == "reports" else "right")) }}
+            {% if current_user.role == "admin" %}
+            {{ nav_link(url_for("pages.settings") ~ ref_qs, "ti-settings", "Configuración", current=(active_page == "settings"), chevron=("up" if active_page == "settings" else "right")) }}
+            {% if notification_sidebar %}<li class="st-sidebar-settings"><ul class="ix-nav-children">{% for key, label in tabs %}<li><a href="{{ url_for('pages.settings', tab=key, ref=1) }}" {% if key == tab %}aria-current="page"{% endif %}>{{ label }}</a></li>{% endfor %}</ul></li>{% endif %}
+            {% endif %}
+            {% else %}
+            <li class="ix-nav-section" aria-hidden="true">Inventario</li>
+            {{ nav_link("/products", "ti-box", "Productos", current=(active_page == "products")) }}
+            {{ nav_link("/categories", "ti-category", "Categorías", current=(active_page == "categories")) }}
+            {{ nav_link("/catalog", "ti-layout-grid", "Catálogo visual", current=(active_page == "catalog")) }}
+            {{ nav_link("/chatbot", "ti-message-chatbot", "Asistente de inventario", current=(active_page == "chatbot")) }}
+            {{ nav_link("/inventory", "ti-arrows-exchange", "Inventario", current=(active_page == "inventory")) }}
+            <li class="ix-nav-section" aria-hidden="true">Operaciones</li>
+            {{ nav_link("/delivery-notes", "ti-file-invoice", "Notas de entrega", current=(active_page == "delivery_notes")) }}
+            {% if current_user.role in ('admin', 'inventario') %}
+            {{ nav_link(url_for("pages.historical_imports"), "ti-file-upload", "Importación histórica", current=(active_page == "historical_imports")) }}
+            <li class="ix-nav-section" aria-hidden="true">Análisis</li>
+            {{ nav_group("ix-nav-pred", "ti-chart-line", "Análisis predictivo", pred_children, pred_active, active_page) }}
+            {{ nav_link(url_for("pages.predictions"), "ti-database-search", "Diagnóstico de historial", current=(active_page == "predictions")) }}
+            {% endif %}
+            {% if current_user.role in ('admin', 'inventario') %}
+            {{ nav_link(url_for("pages.report_sales"), "ti-chart-bar", "Reportes", current=(active_page == "reports")) }}
+            {% endif %}
+            {% if current_user.role == "admin" %}
+            {{ nav_link(url_for("pages.settings"), "ti-settings", "Configuración", current=(active_page == "settings")) }}
+            {% endif %}
+            {% endif %}
+        </ul>
+    </nav>
+
+    <div class="ix-sidebar-footer">
+        {% if reference_mode %}
+        <button type="button" class="ix-branch{{ ' has-sub' if branch_sub }}" aria-haspopup="listbox" aria-expanded="false">
+            <i class="ti ti-building-store" aria-hidden="true">{% if lucide_sidebar %}{{ st.icon("store") }}{% endif %}</i>
+            {% if branch_sub %}
+            <span class="ix-branch-text">
+                <span class="ix-branch-name">Sucursal Principal</span>
+                <span class="ix-branch-sub">{{ branch_sub }}</span>
+            </span>
+            {% else %}
+            Sucursal Principal
+            {% endif %}
+            <i class="ti ti-chevron-down ix-nav-chevron" aria-hidden="true">{% if lucide_sidebar %}{{ st.icon("chevron") }}{% endif %}</i>
+        </button>
+        <div class="ix-divider" role="presentation"></div>
+        <a href="/profile" class="ix-user" title="Mi perfil">
+            <span class="ix-user-avatar" aria-hidden="true">AD</span>
+            <span class="ix-user-text">
+                <span class="ix-user-name">Administrador</span>
+                <span class="ix-user-meta">admin@ferreteriapro.com</span>
+            </span>
+            <i class="ti ti-chevron-down ix-nav-chevron" aria-hidden="true">{% if lucide_sidebar %}{{ st.icon("chevron") }}{% endif %}</i>
+        </a>
+        {% else %}
+        <div class="ix-divider" role="presentation"></div>
+        <a href="/profile" class="ix-user" title="Mi perfil">
+            <span class="ix-user-avatar" aria-hidden="true">
+                {% if current_user.profile_photo_url %}
+                <img src="{{ current_user.profile_photo_url }}" alt="">
+                {% else %}
+                {{ (current_user.name or "U")[:2] | upper }}
+                {% endif %}
+            </span>
+            <span class="ix-user-text">
+                <span class="ix-user-name">{{ current_user.name }}</span>
+                <span class="ix-user-meta">{{ current_user.email }}</span>
+            </span>
+            <i class="ti ti-chevron-right ix-nav-chevron" aria-hidden="true">{% if lucide_sidebar %}{{ st.icon("chevron") }}{% endif %}</i>
+        </a>
+        {% endif %}
+    </div>
+</aside>

@@ -1,0 +1,26 @@
+{% extends "ix_base.html" %}
+{% import "settings/_macros.html" as st %}
+{% set active_page = "settings" %}
+{% set sidebar_variant = "settings" %}
+{% block title %}Configuración — {{ 'Ferretería Pro' if reference_mode else 'El Conejo C.A.' }}{% endblock %}
+{% block head %}<link rel="stylesheet" href="{{ url_for('static', filename='css/ix_settings.css') }}">{% endblock %}
+{% block main_class %} st-page st-{{ tab }}{% endblock %}
+{% block main %}
+<header class="st-header">
+    <div class="st-heading"><h1>Configuración</h1><nav class="st-breadcrumb" aria-label="Ruta de navegación"><a href="{{ url_for('pages.dashboard', ref=1) if reference_mode else url_for('pages.dashboard') }}">Inicio</a>{{ st.icon('chevron') }}<a href="{{ url_for('pages.settings', tab='general', ref=1) if reference_mode else url_for('pages.settings') }}">Configuración</a>{% if tab in ('predictive', 'notifications', 'users', 'security', 'backup') %}{{ st.icon('chevron') }}<span>{{ dict(tabs)[tab] }}</span>{% endif %}</nav><p>{{ 'Gestiona los respaldos de la base de datos y la información del sistema.' if tab == 'backup' else 'Administra los usuarios del sistema, asigna roles y define permisos de acceso.' if tab == 'users' else 'Administra la seguridad de tu cuenta, accesos al sistema y políticas de protección de datos.' if tab == 'security' else 'Configura cómo y cuándo recibir notificaciones del sistema.' if tab == 'notifications' else 'Configura los parámetros y modelos utilizados para el análisis predictivo del sistema.' if tab == 'predictive' else 'Administra las preferencias del sistema, parámetros de análisis predictivo y opciones de la aplicación.' }}</p></div>
+    <div class="st-header-side"><div class="st-search-row"><label class="st-search">{{ st.icon('search') }}<input aria-label="Buscar en el sistema" placeholder="Buscar productos, clientes, reportes..." readonly></label><button type="button" class="st-bell" aria-label="Notificaciones: vista previa" data-preview-action>{{ st.icon('bell') }}{% if reference_mode %}<span>3</span>{% endif %}</button></div><div class="st-actions">{{ st.action('Probar notificaciones','send') if tab == 'notifications' else st.action('Restablecer valores','reset') }}{{ st.action('Guardar cambios','save',True) }}</div></div>
+    <button type="button" id="ix-menu-toggle" class="st-menu st-button" aria-expanded="false" aria-controls="ix-sidebar">Menú</button>
+</header>
+<nav class="st-tabs flex items-center" aria-label="Configuración">
+{% set icons = ['settings','chart','bell','users','shield','integrations',('clipboard' if tab == 'backup' else 'lock')] %}
+{% for key, label in tabs %}<a href="{{ url_for('pages.settings', tab=key, ref=1) if reference_mode else url_for('pages.settings', tab=key) }}" class="{{ 'is-active' if key == tab }}" {% if key == tab %}aria-current="page"{% endif %}>{{ st.icon(icons[loop.index0]) }}{{ label }}</a>{% endfor %}
+</nav>
+{% if fixture and tab in ('general', 'predictive', 'notifications', 'users', 'security', 'backup') %}
+<form class="st-form" aria-label="Vista previa de configuración" onsubmit="return false">
+{% include 'settings/_' ~ tab ~ '.html' %}
+</form>
+{% if tab == 'general' %}<footer class="st-footer">© 2024 Ferretería Pro C.A. - Sistema de Gestión. Todos los derechos reservados.</footer>{% endif %}
+{% else %}<section class="st-card st-unavailable"><h2>{{ dict(tabs)[tab] }}</h2>{% if tab == 'backup' %}<p>El respaldo y la restauración no están implementados. No hay información verificada sobre respaldos, almacenamiento ni programación automática. No se crean ni restauran respaldos y no se conectan servicios externos.</p>{% else %}<p>Esta sección todavía no dispone de una interfaz de configuración conectada. No se muestran valores simulados ni se realizan cambios.</p><p>Las funciones existentes de perfil, usuarios y análisis conservan sus rutas y permisos actuales.</p>{% endif %}<a href="{{ url_for('pages.profile') }}">Ir a mi perfil</a></section>{% endif %}
+<div class="st-toast" role="status" hidden>Vista previa: esta acción no guarda datos ni ejecuta procesos.</div>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='js/ix_settings.js') }}"></script>{% endblock %}

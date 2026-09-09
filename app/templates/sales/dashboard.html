@@ -1,0 +1,114 @@
+{% extends "sales/_page.html" %}
+{# Dashboard de Ventas (panel "1. Dashboard de Ventas" del collage aprobado). Landing del
+   módulo: KPI, ventas de los últimos 12 meses, ventas por categoría, últimas órdenes y
+   ventas recientes. Modo referencia con fixture; modo normal muestra el estado veraz. #}
+{% set active_page = "sales" %}
+
+{% block title %}Ventas{% endblock %}
+
+{% block main_class %} iv-page sa-page sa-dash{% endblock %}
+
+{% block main %}
+{{ sa.header("Ventas", "Gestiona tus ventas, cotizaciones y pedidos de manera eficiente.",
+             fixture.search_placeholder if fixture else "", reference_mode=reference_mode) }}
+
+{% if not fixture %}
+{{ sa.unavailable("Dashboard de ventas") }}
+{% else %}
+{{ sa.date_bar(fixture.date_range, fixture.compare) }}
+
+{{ iv.kpis(fixture.kpis) }}
+
+<section class="sa-charts" aria-label="Ventas por mes y por categoría">
+    <article class="ix-card sa-chart-card">
+        <div class="ix-card-head sa-card-head">
+            <h2 class="ix-card-title">{{ fixture.sales_chart.title }}</h2>
+            <button type="button" class="ix-diario sa-range" aria-haspopup="listbox" aria-expanded="false">{{ fixture.sales_chart.range }}<i class="ti ti-chevron-down" aria-hidden="true"></i></button>
+        </div>
+        <ul class="ix-chart-legend sa-legend">
+            {% for label, dashed in fixture.sales_chart.legend %}
+            <li><span class="ix-swatch{{ ' is-dashed' if dashed }}"></span><span>{{ label }}</span></li>
+            {% endfor %}
+        </ul>
+        <div class="ix-chart sa-line" data-line-chart='{{ fixture.sales_chart | tojson }}'>
+            <canvas role="img" aria-label="{{ fixture.sales_chart.title }}"></canvas>
+            <div class="ix-chart-tip sa-chart-tip"></div>
+        </div>
+    </article>
+
+    {% set d = fixture.donut %}
+    <article class="ix-card sa-donut-card">
+        <div class="ix-card-head sa-card-head">
+            <h2 class="ix-card-title">{{ d.title }}</h2>
+            <button type="button" class="ix-diario sa-range" aria-haspopup="listbox" aria-expanded="false">{{ d.range }}<i class="ti ti-chevron-down" aria-hidden="true"></i></button>
+        </div>
+        <div class="sa-donut-body">
+            <div class="iv-donut sa-donut" data-donut='{{ d["items"] | map(attribute=3) | list | tojson }}' data-tones='{{ d["items"] | map(attribute=2) | list | tojson }}' data-cutout="62">
+                <canvas role="img" aria-label="{{ d.title }}"></canvas>
+                <div class="ix-donut-center">
+                    <span class="ix-donut-value">{{ d.center_value }}</span>
+                    <span class="ix-donut-label">{{ d.center_label }}</span>
+                </div>
+            </div>
+            <ul class="ix-legend sa-donut-legend">
+                {% for name, sub, tone, _ in d["items"] %}
+                <li><span class="ix-legend-dot iv-dot-{{ tone }}"></span><span><span class="ix-legend-name">{{ name }}</span><span class="ix-legend-sub">{{ sub }}</span></span></li>
+                {% endfor %}
+            </ul>
+            <div class="sa-mini-bars" data-mini-bars='{{ d.bars | tojson }}'>
+                <canvas role="img" aria-label="{{ d.bars.caption }}"></canvas>
+                <p class="sa-mini-caption">{{ d.bars.caption }}</p>
+            </div>
+        </div>
+    </article>
+</section>
+
+<section class="sa-bottom" aria-label="Últimas órdenes y ventas recientes">
+    <article class="ix-card sa-orders">
+        <div class="ix-card-head sa-card-head"><h2 class="ix-card-title">{{ fixture.orders.title }}</h2></div>
+        <ul class="sa-order-list">
+            {% for ico, tone, number, customer, total, status in fixture.orders.rows %}
+            <li>
+                <span class="sa-order-icon tone-{{ tone }}" aria-hidden="true">{{ iv.icon(ico) }}</span>
+                <span class="ix-row-text">
+                    <span class="ix-row-title">{{ number }}</span>
+                    <span class="ix-row-desc">{{ customer }}</span>
+                    <span class="ix-row-desc">{{ total }}</span>
+                </span>
+                {{ sa.badge(status) }}
+            </li>
+            {% endfor %}
+        </ul>
+    </article>
+
+    <article class="ix-card sa-recent">
+        <div class="ix-card-head sa-card-head">
+            <h2 class="ix-card-title">{{ fixture.recent.title }}</h2>
+            <a href="{{ url_for('pages.sales_list') }}{{ ref_qs }}" class="sa-link">{{ fixture.recent.link }}</a>
+        </div>
+        <div class="px-table-wrap sa-table-wrap">
+            <table class="px-table sa-table sa-recent-table">
+                <colgroup><col style="width: 34px"><col style="width: 118px"><col style="width: 172px"><col style="width: 104px"><col style="width: 118px"><col style="width: 110px"><col></colgroup>
+                <thead>
+                    <tr>{% for c in fixture.recent.columns %}<th scope="col"{% if loop.last %} class="is-end"{% endif %}>{{ c }}</th>{% endfor %}</tr>
+                </thead>
+                <tbody>
+                    {% for date, customer, products, method, status, total in fixture.recent.rows %}
+                    <tr>
+                        <td class="sa-muted">{{ loop.index }}</td>
+                        <td class="sa-muted">{{ date }}</td>
+                        <td>{{ customer }}</td>
+                        <td class="sa-muted">{{ products }}</td>
+                        <td>{{ method }}</td>
+                        <td>{{ sa.badge(status) }}</td>
+                        <td class="is-end"><strong>{{ total }}</strong></td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {{ sa.pagination(fixture.recent.pagination) }}
+    </article>
+</section>
+{% endif %}
+{% endblock %}

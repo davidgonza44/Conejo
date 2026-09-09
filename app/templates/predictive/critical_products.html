@@ -1,0 +1,80 @@
+{% extends "predictive/_page.html" %}
+{% import "predictive/_macros.html" as px %}
+{% set active_page = "critical_products" %}
+
+{% block title %}Productos críticos — Análisis predictivo{% endblock %}
+
+{% block main %}
+{{ px.header("Productos críticos",
+             "Identifica productos con mayor riesgo de quiebre y prioriza acciones inmediatas.",
+             None, fixture.search_placeholder if fixture else "", "Actualizar análisis", reference_mode=reference_mode) }}
+
+{% if not fixture %}
+{{ px.unavailable("Productos críticos") }}
+{% else %}
+{{ px.kpis(fixture.kpis) }}
+{{ px.filters(fixture.filters) }}
+
+<div class="px-body" style="--px-aside: 357px">
+    <div class="px-main">
+        {{ px.module_tabs("critical_products", ref_qs) }}
+        <section class="ix-card px-table-card" aria-labelledby="critical-title">
+            <h2 class="px-card-title" id="critical-title">{{ fixture.table_title }}</h2>
+            <div class="px-table-wrap">
+                <table class="px-table">
+                    <colgroup>
+                        <col style="width: 232px"><col style="width: 94px"><col style="width: 86px"><col style="width: 80px">
+                        <col style="width: 106px"><col style="width: 84px"><col style="width: 136px"><col>
+                    </colgroup>
+                    <thead>
+                        <tr>
+                            <th scope="col">Producto</th>
+                            <th scope="col">Categoría</th>
+                            <th scope="col">Stock actual</th>
+                            <th scope="col">Cobertura</th>
+                            <th scope="col">Demanda estimada<br><span class="px-th-sub">(30 días)</span></th>
+                            <th scope="col">Riesgo</th>
+                            <th scope="col">Causa principal</th>
+                            <th scope="col" class="is-actions">Acciones</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for r in fixture.rows %}
+                        <tr>
+                            <td>{{ px.product_cell(r.p) }}</td>
+                            <td>{{ r.cat }}</td>
+                            <td><strong class="tone-red">{{ r.stock }}</strong></td>
+                            <td>{{ r.cover }}</td>
+                            <td>{{ r.demand }}</td>
+                            <td>{{ px.badge(r.risk) }}</td>
+                            <td>{{ r.cause }}</td>
+                            <td class="is-actions">{{ px.actions_cell() }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {{ px.pagination(fixture.pagination) }}
+        </section>
+    </div>
+
+    <aside class="px-aside" aria-label="Resumen de criticidad">
+        {{ px.donut_card(fixture.donut, "critical-donut") }}
+        <article class="ix-card px-aside-card px-top">
+            <h2 class="px-card-title">{{ fixture.top.title }}</h2>
+            <ol class="px-top-list">
+                {% for p, pct, label in fixture.top.rows %}
+                <li>
+                    <span class="px-top-rank">{{ loop.index }}</span>
+                    {{ px.product_cell(p) }}
+                    <span class="px-bar is-red" aria-hidden="true"><span style="width: {{ pct }}%"></span></span>
+                    <span class="px-top-value">{{ label }}</span>
+                </li>
+                {% endfor %}
+            </ol>
+        </article>
+        {{ px.info_card(fixture.info.title, fixture.info.text) }}
+    </aside>
+</div>
+{% endif %}
+{% endblock %}

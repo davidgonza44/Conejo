@@ -1,331 +1,260 @@
-{% extends "base_app.html" %}
+{% extends "ix_base.html" %}
+{# Pantalla Inicio: shell compartido (ix_base.html); composición propia en inicio.css. #}
 {% set active_page = "dashboard" %}
+{% set sidebar_variant = "inicio" %}
 
-{% block title %}Dashboard de reportes — Ferretería El Conejo{% endblock %}
+{% block title %}Inicio — Ferretería El Conejo{% endblock %}
 
-{% block content %}
-
-<!-- Encabezado -->
-<div class="page-header mb-3">
-    <div class="row align-items-center">
-        <div class="col">
-            <h1 class="page-title mb-1">
-                <i class="ti ti-chart-bar me-2 text-primary"></i>Dashboard de reportes
-            </h1>
-            <div class="text-secondary">
-                Inventario, movimientos y notas de entrega — solo lectura
+{% block main %}
+        <header class="ix-header">
+            <div>
+                <h1 class="ix-title">Inicio</h1>
+                <p class="ix-subtitle">Resumen general del negocio</p>
             </div>
-        </div>
-        <div class="col-auto text-secondary small" id="last-update"></div>
-    </div>
-</div>
-
-<!-- Mensajes globales (401 / 403 / errores de red) -->
-<div id="global-alert" class="alert d-none" role="alert"></div>
-
-<!-- Filtros -->
-<div class="card mb-3">
-    <div class="card-body py-3">
-        <form id="filters-form" class="row g-2 align-items-end" autocomplete="off">
-            <div class="col-6 col-md-2">
-                <label class="form-label mb-1" for="f-date-from">Desde</label>
-                <input type="date" id="f-date-from" class="form-control form-control-sm">
-            </div>
-            <div class="col-6 col-md-2">
-                <label class="form-label mb-1" for="f-date-to">Hasta</label>
-                <input type="date" id="f-date-to" class="form-control form-control-sm">
-            </div>
-            <div class="col-4 col-md-2">
-                <label class="form-label mb-1" for="f-days">Días sin movimiento</label>
-                <input type="number" id="f-days" class="form-control form-control-sm"
-                       min="1" step="1" value="30">
-            </div>
-            <div class="col-4 col-md-2">
-                <label class="form-label mb-1" for="f-multiplier">Multiplicador exceso</label>
-                <input type="number" id="f-multiplier" class="form-control form-control-sm"
-                       min="1" step="0.5" value="3">
-            </div>
-            <div class="col-4 col-md-1">
-                <label class="form-label mb-1" for="f-limit">Límite</label>
-                <input type="number" id="f-limit" class="form-control form-control-sm"
-                       min="1" step="1" value="10">
-            </div>
-            <div class="col-12 col-md-3 d-flex gap-2">
-                <button type="submit" id="btn-apply" class="btn btn-primary btn-sm flex-fill">
-                    <i class="ti ti-filter me-1"></i>Aplicar filtros
+            <div class="ix-header-actions">
+                <button type="button" class="ix-menu-toggle" id="ix-menu-toggle"
+                        aria-controls="ix-sidebar" aria-expanded="false" aria-label="Abrir menú">
+                    <i class="ti ti-menu-2" aria-hidden="true"></i>
                 </button>
-                <button type="button" id="btn-clear" class="btn btn-outline-secondary btn-sm flex-fill">
-                    <i class="ti ti-filter-off me-1"></i>Limpiar
+                {% if reference_mode %}
+                <label class="ix-search">
+                    <i class="ti ti-search" aria-hidden="true"></i>
+                    <input type="search" placeholder="Buscar productos, clientes, reportes..." aria-label="Buscar">
+                </label>
+                <button type="button" class="ix-bell" aria-label="Notificaciones: 3 sin leer">
+                    <i class="ti ti-bell" aria-hidden="true"></i>
+                    <span class="ix-bell-badge" aria-hidden="true">3</span>
                 </button>
+                {% else %}
+                <span class="ix-last-update" id="last-update"></span>
+                <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-toggle="collapse"
+                        data-bs-target="#inicio-filters" aria-controls="inicio-filters" aria-expanded="false">
+                    <i class="ti ti-adjustments-horizontal me-1"></i>Filtros
+                </button>
+                <button type="button" class="btn btn-outline-danger btn-sm" onclick="logout()">
+                    <i class="ti ti-logout me-1"></i>Cerrar sesión
+                </button>
+                {% endif %}
             </div>
-        </form>
-        <div id="filters-error" class="text-danger small mt-2 d-none"></div>
-    </div>
-</div>
+        </header>
 
-<!-- Tarjetas KPI -->
-<div class="row row-cards g-2 mb-3" id="kpi-row">
-    <div class="col-6 col-sm-4 col-xl">
-        <div class="card kpi-card">
-            <div class="card-body">
-                <div class="kpi-icon bg-primary-lt"><i class="ti ti-box"></i></div>
-                <div class="kpi-value" id="kpi-total-products">—</div>
-                <div class="kpi-label">Total productos</div>
-            </div>
-        </div>
-    </div>
-    <div class="col-6 col-sm-4 col-xl">
-        <div class="card kpi-card">
-            <div class="card-body">
-                <div class="kpi-icon bg-success-lt"><i class="ti ti-circle-check"></i></div>
-                <div class="kpi-value" id="kpi-active-products">—</div>
-                <div class="kpi-label">Productos activos</div>
-            </div>
-        </div>
-    </div>
-    <div class="col-6 col-sm-4 col-xl">
-        <div class="card kpi-card">
-            <div class="card-body">
-                <div class="kpi-icon bg-secondary-lt"><i class="ti ti-circle-off"></i></div>
-                <div class="kpi-value" id="kpi-inactive-products">—</div>
-                <div class="kpi-label">Productos inactivos</div>
-            </div>
-        </div>
-    </div>
-    <div class="col-6 col-sm-4 col-xl">
-        <div class="card kpi-card kpi-warning">
-            <div class="card-body">
-                <div class="kpi-icon bg-warning-lt"><i class="ti ti-alert-triangle"></i></div>
-                <div class="kpi-value" id="kpi-low-stock">—</div>
-                <div class="kpi-label">Bajo stock</div>
-            </div>
-        </div>
-    </div>
-    <div class="col-6 col-sm-4 col-xl">
-        <div class="card kpi-card">
-            <div class="card-body">
-                <div class="kpi-icon bg-info-lt"><i class="ti ti-category"></i></div>
-                <div class="kpi-value" id="kpi-total-categories">—</div>
-                <div class="kpi-label">Categorías</div>
-            </div>
-        </div>
-    </div>
-    <div class="col-6 col-sm-4 col-xl">
-        <div class="card kpi-card">
-            <div class="card-body">
-                <div class="kpi-icon bg-primary-lt"><i class="ti ti-arrows-exchange"></i></div>
-                <div class="kpi-value" id="kpi-total-movements">—</div>
-                <div class="kpi-label">Movimientos</div>
-            </div>
-        </div>
-    </div>
-    <div class="col-6 col-sm-4 col-xl">
-        <div class="card kpi-card">
-            <div class="card-body">
-                <div class="kpi-icon bg-success-lt"><i class="ti ti-file-check"></i></div>
-                <div class="kpi-value" id="kpi-issued-notes">—</div>
-                <div class="kpi-label">Notas emitidas</div>
-            </div>
-        </div>
-    </div>
-    <div class="col-6 col-sm-4 col-xl">
-        <div class="card kpi-card">
-            <div class="card-body">
-                <div class="kpi-icon bg-danger-lt"><i class="ti ti-file-x"></i></div>
-                <div class="kpi-value" id="kpi-cancelled-notes">—</div>
-                <div class="kpi-label">Notas canceladas</div>
-            </div>
-        </div>
-    </div>
-    <div class="col-6 col-sm-4 col-xl">
-        <div class="card kpi-card kpi-gold">
-            <div class="card-body">
-                <div class="kpi-icon bg-yellow-lt"><i class="ti ti-cash"></i></div>
-                <div class="kpi-value" id="kpi-total-amount">—</div>
-                <div class="kpi-label">Monto total emitido</div>
-            </div>
-        </div>
-    </div>
-    <div class="col-6 col-sm-4 col-xl">
-        <div class="card kpi-card kpi-gold">
-            <div class="card-body">
-                <div class="kpi-icon bg-yellow-lt"><i class="ti ti-calculator"></i></div>
-                <div class="kpi-value" id="kpi-avg-amount">—</div>
-                <div class="kpi-label">Promedio por nota</div>
-            </div>
-        </div>
-    </div>
-</div>
+        <div class="ix-stack">
+            <!-- Mensajes globales (401 / 403 / errores de red) -->
+            <div id="global-alert" class="alert d-none" role="alert"></div>
 
-<!-- Gráficos -->
-<div class="row row-cards g-3 mb-3">
-    <div class="col-12 col-lg-6">
-        <div class="card">
-            <div class="card-header">
-                <h3 class="card-title"><i class="ti ti-trending-up me-2 text-primary"></i>Entradas vs salidas por día</h3>
+            <!-- Filtros (colapsados; se abren desde el botón "Filtros" de la cabecera) -->
+            <div class="collapse ix-filters" id="inicio-filters">
+                <div class="ix-card">
+                    <form id="filters-form" class="row g-2 align-items-end" autocomplete="off">
+                        <div class="col-6 col-md-2">
+                            <label class="form-label mb-1" for="f-date-from">Desde</label>
+                            <input type="date" id="f-date-from" class="form-control form-control-sm">
+                        </div>
+                        <div class="col-6 col-md-2">
+                            <label class="form-label mb-1" for="f-date-to">Hasta</label>
+                            <input type="date" id="f-date-to" class="form-control form-control-sm">
+                        </div>
+                        <div class="col-4 col-md-2">
+                            <label class="form-label mb-1" for="f-days">Días sin movimiento</label>
+                            <input type="number" id="f-days" class="form-control form-control-sm" min="1" step="1" value="30">
+                        </div>
+                        <div class="col-4 col-md-2">
+                            <label class="form-label mb-1" for="f-multiplier">Multiplicador exceso</label>
+                            <input type="number" id="f-multiplier" class="form-control form-control-sm" min="1" step="0.5" value="3">
+                        </div>
+                        <div class="col-4 col-md-1">
+                            <label class="form-label mb-1" for="f-limit">Límite</label>
+                            <input type="number" id="f-limit" class="form-control form-control-sm" min="1" step="1" value="10">
+                        </div>
+                        <div class="col-12 col-md-3 d-flex gap-2">
+                            <button type="submit" id="btn-apply" class="btn btn-primary btn-sm flex-fill">
+                                <i class="ti ti-filter me-1"></i>Aplicar filtros
+                            </button>
+                            <button type="button" id="btn-clear" class="btn btn-outline-secondary btn-sm flex-fill">
+                                <i class="ti ti-filter-off me-1"></i>Limpiar
+                            </button>
+                        </div>
+                    </form>
+                    <div id="filters-error" class="text-danger small mt-2 d-none"></div>
+                </div>
             </div>
-            <div class="card-body">
-                <div class="chart-holder"><canvas id="chart-entries-exits"></canvas></div>
-                <div id="chart-entries-exits-msg" class="widget-msg d-none"></div>
-            </div>
-        </div>
-    </div>
-    <div class="col-12 col-lg-6">
-        <div class="card">
-            <div class="card-header">
-                <h3 class="card-title"><i class="ti ti-stack-2 me-2 text-primary"></i>Stock actual vs stock mínimo</h3>
-            </div>
-            <div class="card-body">
-                <div class="chart-holder"><canvas id="chart-stock-minimum"></canvas></div>
-                <div id="chart-stock-minimum-msg" class="widget-msg d-none"></div>
-            </div>
-        </div>
-    </div>
-    <div class="col-12 col-lg-6">
-        <div class="card">
-            <div class="card-header">
-                <h3 class="card-title"><i class="ti ti-package-export me-2 text-primary"></i>Productos con más salidas</h3>
-            </div>
-            <div class="card-body">
-                <div class="chart-holder"><canvas id="chart-top-exits"></canvas></div>
-                <div id="chart-top-exits-msg" class="widget-msg d-none"></div>
-            </div>
-        </div>
-    </div>
-    <div class="col-12 col-lg-6">
-        <div class="card">
-            <div class="card-header">
-                <h3 class="card-title"><i class="ti ti-calendar-stats me-2 text-primary"></i>Notas de entrega por período</h3>
-            </div>
-            <div class="card-body">
-                <div class="chart-holder"><canvas id="chart-notes-period"></canvas></div>
-                <div id="chart-notes-period-msg" class="widget-msg d-none"></div>
-            </div>
-        </div>
-    </div>
-    <div class="col-12 col-lg-6">
-        <div class="card">
-            <div class="card-header">
-                <h3 class="card-title"><i class="ti ti-truck-delivery me-2 text-primary"></i>Productos más entregados</h3>
-            </div>
-            <div class="card-body">
-                <div class="chart-holder"><canvas id="chart-top-delivered"></canvas></div>
-                <div id="chart-top-delivered-msg" class="widget-msg d-none"></div>
-            </div>
-        </div>
-    </div>
-    <div class="col-12 col-lg-6">
-        <div class="card">
-            <div class="card-header">
-                <h3 class="card-title"><i class="ti ti-users me-2 text-primary"></i>Notas de entrega por usuario</h3>
-            </div>
-            <div class="card-body">
-                <div class="chart-holder"><canvas id="chart-notes-user"></canvas></div>
-                <div id="chart-notes-user-msg" class="widget-msg d-none"></div>
-            </div>
-        </div>
-    </div>
-</div>
 
-<!-- Tablas -->
-<div class="row row-cards g-3">
-    <div class="col-12 col-lg-6">
-        <div class="card">
-            <div class="card-header">
-                <h3 class="card-title"><i class="ti ti-alert-triangle me-2 text-warning"></i>Productos bajo stock</h3>
-                <span class="card-actions badge bg-warning-lt" id="badge-low-stock"></span>
-            </div>
-            <div class="table-responsive">
-                <table class="table table-vcenter table-striped card-table">
-                    <thead>
-                        <tr>
-                            <th>Código</th>
-                            <th>Producto</th>
-                            <th>Categoría</th>
-                            <th class="text-end">Stock</th>
-                            <th class="text-end">Mínimo</th>
-                            <th>Estado</th>
-                        </tr>
-                    </thead>
-                    <tbody id="table-low-stock"></tbody>
-                </table>
-            </div>
-        </div>
-    </div>
-    <div class="col-12 col-lg-6">
-        <div class="card">
-            <div class="card-header">
-                <h3 class="card-title"><i class="ti ti-zzz me-2 text-secondary"></i>Productos sin movimiento</h3>
-                <span class="card-actions badge bg-secondary-lt" id="badge-no-movement"></span>
-            </div>
-            <div class="table-responsive">
-                <table class="table table-vcenter table-striped card-table">
-                    <thead>
-                        <tr>
-                            <th>Código</th>
-                            <th>Producto</th>
-                            <th>Categoría</th>
-                            <th class="text-end">Stock</th>
-                            <th>Último movimiento</th>
-                            <th class="text-end">Días</th>
-                        </tr>
-                    </thead>
-                    <tbody id="table-no-movement"></tbody>
-                </table>
-            </div>
-        </div>
-    </div>
-    <div class="col-12 col-lg-6">
-        <div class="card">
-            <div class="card-header">
-                <h3 class="card-title"><i class="ti ti-database-export me-2 text-info"></i>Productos con exceso de stock</h3>
-                <span class="card-actions badge bg-info-lt" id="badge-excess"></span>
-            </div>
-            <div class="table-responsive">
-                <table class="table table-vcenter table-striped card-table">
-                    <thead>
-                        <tr>
-                            <th>Código</th>
-                            <th>Producto</th>
-                            <th>Categoría</th>
-                            <th class="text-end">Stock</th>
-                            <th class="text-end">Mínimo</th>
-                            <th class="text-end">Exceso</th>
-                        </tr>
-                    </thead>
-                    <tbody id="table-excess"></tbody>
-                </table>
-            </div>
-        </div>
-    </div>
-    <div class="col-12 col-lg-6">
-        <div class="card">
-            <div class="card-header">
-                <h3 class="card-title"><i class="ti ti-adjustments me-2 text-primary"></i>Ajustes de inventario</h3>
-                <span class="card-actions badge bg-primary-lt" id="badge-adjustments"></span>
-            </div>
-            <div class="table-responsive">
-                <table class="table table-vcenter table-striped card-table">
-                    <thead>
-                        <tr>
-                            <th>Fecha</th>
-                            <th>Producto</th>
-                            <th class="text-end">Anterior</th>
-                            <th class="text-end">Nuevo</th>
-                            <th>Motivo</th>
-                            <th>Usuario</th>
-                        </tr>
-                    </thead>
-                    <tbody id="table-adjustments"></tbody>
-                </table>
-            </div>
-        </div>
-    </div>
-</div>
+            <!-- Fila 1: cuatro KPI (contenido dibujado por dashboard.js) -->
+            <section class="ix-grid ix-kpis" id="kpi-row" aria-label="Indicadores"></section>
 
+            <!-- Fila 2: gráfico de líneas + dona por categoría -->
+            <section class="ix-grid ix-main-row">
+                <div class="ix-card ix-chart-card" id="card-sales">
+                    <div class="ix-card-head">
+                        <h2 class="ix-card-title">{{ 'Ventas de los últimos 7 días' if reference_mode else 'Entradas vs salidas por día' }}</h2>
+                        {% if reference_mode %}
+                        <button type="button" class="ix-diario" aria-haspopup="listbox" aria-expanded="false">
+                            Diario<i class="ti ti-chevron-down" aria-hidden="true"></i>
+                        </button>
+                        {% endif %}
+                    </div>
+                    <ul class="ix-chart-legend" id="chart-sales-legend"></ul>
+                    <div class="ix-chart">
+                        <canvas id="chart-sales" role="img" aria-label="Gráfico de líneas"></canvas>
+                        <div class="ix-chart-tip" id="chart-sales-tip"></div>
+                    </div>
+                    <div id="chart-sales-msg" class="ix-msg d-none"></div>
+                </div>
+                <div class="ix-card ix-chart-card" id="card-category">
+                    <div class="ix-card-head">
+                        <h2 class="ix-card-title">{{ 'Inventario por categoría' if reference_mode else 'Movimientos por categoría' }}</h2>
+                    </div>
+                    <div class="ix-category-body">
+                        <div class="ix-donut">
+                            <canvas id="chart-category" role="img" aria-label="Gráfico de dona por categoría"></canvas>
+                            <div class="ix-donut-center">
+                                <span class="ix-donut-value" id="chart-category-value"></span>
+                                <span class="ix-donut-label" id="chart-category-label"></span>
+                            </div>
+                        </div>
+                        <ul class="ix-legend" id="chart-category-legend"></ul>
+                    </div>
+                    <div id="chart-category-msg" class="ix-msg d-none"></div>
+                </div>
+            </section>
+
+            <!-- Fila 3: movimientos + bajo stock + acciones rápidas; tabla debajo -->
+            <section class="ix-grid ix-lower">
+                <div class="ix-card" id="card-activity">
+                    <div class="ix-card-head">
+                        <h2 class="ix-card-title">{{ 'Movimientos recientes' if reference_mode else 'Ajustes de inventario' }}</h2>
+                        <a href="{{ '#' if reference_mode else '/inventory' }}" class="ix-link-btn">Ver todos</a>
+                    </div>
+                    <div class="ix-list" id="table-adjustments"></div>
+                </div>
+                <div class="ix-card" id="card-lowstock">
+                    <div class="ix-card-head">
+                        <h2 class="ix-card-title">Productos con bajo stock</h2>
+                        <a href="{{ '#' if reference_mode else '/inventory' }}" class="ix-link-btn">Ver todos</a>
+                    </div>
+                    <div class="ix-list" id="table-low-stock"></div>
+                </div>
+                <div class="ix-card" id="card-actions">
+                    <div class="ix-card-head">
+                        <h2 class="ix-card-title">Acciones rápidas</h2>
+                    </div>
+                    <nav class="ix-actions" aria-label="Acciones rápidas">
+                        {% if reference_mode %}
+                        {% set actions = [("#", "ti-plus", "is-solid", "Nuevo producto", "Agregar un nuevo producto al inventario"),
+                                          ("#", "svg:cart", "tone-green", "Registrar venta", "Crear una nueva venta"),
+                                          ("#", "svg:clipboard", "tone-purple", "Registrar compra", "Registrar una nueva compra"),
+                                          ("#", "svg:chart-bar", "tone-orange", "Ver reportes", "Consultar reportes y estadísticas")] %}
+                        {% else %}
+                        {% set actions = [("/products", "ti-box", "is-solid", "Productos", "Gestionar el catálogo de productos"),
+                                          ("/inventory", "ti-arrows-exchange", "tone-green", "Registrar movimiento", "Entradas, salidas y ajustes de inventario"),
+                                          ("/delivery-notes", "ti-file-invoice", "tone-purple", "Notas de entrega", "Consultar las notas emitidas"),
+                                          ("/predictions", "ti-chart-line", "tone-orange", "Análisis predictivo", "Diagnóstico de demanda por producto")] %}
+                        {% endif %}
+                        {% for href, icon, tone, title, desc in actions %}
+                        <a href="{{ href }}" class="ix-action">
+                            {% if icon.startswith("svg:") %}
+                            <span class="ix-row-icon {{ tone }}" data-svg="{{ icon[4:] }}" aria-hidden="true"></span>
+                            {% else %}
+                            <span class="ix-row-icon {{ tone }}" aria-hidden="true"><i class="ti {{ icon }}"></i></span>
+                            {% endif %}
+                            <span class="ix-row-text">
+                                <span class="ix-row-title">{{ title }}</span>
+                                <span class="ix-row-desc">{{ desc }}</span>
+                            </span>
+                            <i class="ti ti-chevron-right ix-nav-chevron" aria-hidden="true"></i>
+                        </a>
+                        {% endfor %}
+                    </nav>
+                </div>
+                <div class="ix-card" id="card-top">
+                    <div class="ix-card-head">
+                        <h2 class="ix-card-title">{{ 'Productos más vendidos' if reference_mode else 'Productos con más salidas' }}</h2>
+                        <a href="{{ '#' if reference_mode else '/inventory' }}" class="ix-link-btn">Ver todo</a>
+                    </div>
+                    <div class="ix-table-wrap">
+                        <table class="ix-table">
+                            <thead>
+                                <tr>
+                                    <th scope="col">#</th>
+                                    <th scope="col">Producto</th>
+                                    <th scope="col">Categoría</th>
+                                    <th scope="col" class="is-center">Unidades</th>
+                                    <th scope="col" class="is-end">{{ 'Ingresos' if reference_mode else 'Movimientos' }}</th>
+                                </tr>
+                            </thead>
+                            <tbody id="table-top"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            {% if not reference_mode %}
+            <!-- Reportes secundarios (datos reales; debajo de la composición principal) -->
+            <section class="ix-stack ix-reports" aria-label="Otros reportes">
+                <div class="ix-grid ix-main-row" style="grid-auto-rows: auto;">
+                    <div class="ix-card">
+                        <div class="ix-card-head"><h2 class="ix-card-title">Stock actual vs stock mínimo</h2></div>
+                        <div class="ix-chart"><canvas id="chart-stock-minimum"></canvas></div>
+                        <div id="chart-stock-minimum-msg" class="ix-msg d-none"></div>
+                    </div>
+                    <div class="ix-card">
+                        <div class="ix-card-head"><h2 class="ix-card-title">Notas de entrega por usuario</h2></div>
+                        <div class="ix-chart"><canvas id="chart-notes-user"></canvas></div>
+                        <div id="chart-notes-user-msg" class="ix-msg d-none"></div>
+                    </div>
+                    <div class="ix-card">
+                        <div class="ix-card-head"><h2 class="ix-card-title">Notas de entrega por período</h2></div>
+                        <div class="ix-chart"><canvas id="chart-notes-period"></canvas></div>
+                        <div id="chart-notes-period-msg" class="ix-msg d-none"></div>
+                    </div>
+                    <div class="ix-card">
+                        <div class="ix-card-head"><h2 class="ix-card-title">Productos más entregados</h2></div>
+                        <div class="ix-chart"><canvas id="chart-top-delivered"></canvas></div>
+                        <div id="chart-top-delivered-msg" class="ix-msg d-none"></div>
+                    </div>
+                </div>
+                <div class="ix-card">
+                    <div class="ix-card-head">
+                        <h2 class="ix-card-title">Productos sin movimiento</h2>
+                        <span class="ix-count" id="badge-no-movement"></span>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="table table-vcenter table-sm">
+                            <thead>
+                                <tr>
+                                    <th>Código</th><th>Producto</th><th>Categoría</th>
+                                    <th class="text-end">Stock</th><th>Último movimiento</th><th class="text-end">Días</th>
+                                </tr>
+                            </thead>
+                            <tbody id="table-no-movement"></tbody>
+                        </table>
+                    </div>
+                </div>
+                <div class="ix-card">
+                    <div class="ix-card-head">
+                        <h2 class="ix-card-title">Productos con exceso de stock</h2>
+                        <span class="ix-count" id="badge-excess"></span>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="table table-vcenter table-sm">
+                            <thead>
+                                <tr>
+                                    <th>Código</th><th>Producto</th><th>Categoría</th>
+                                    <th class="text-end">Stock</th><th class="text-end">Mínimo</th><th class="text-end">Exceso</th>
+                                </tr>
+                            </thead>
+                            <tbody id="table-excess"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+            {% endif %}
+        </div>
 {% endblock %}
 
 {% block scripts %}
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+{% if reference_mode %}
+<script src="{{ url_for('static', filename='js/dashboard_reference_data.js') }}"></script>
+{% endif %}
 <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
 {% endblock %}

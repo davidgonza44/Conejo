@@ -1,0 +1,31 @@
+{% import 'reports/_sales_macros.html' as rs %}
+{% macro symbol(name) %}
+{% if name in ['layers','bars','card','cash','transfer','bank','drill','hammer','bricks','bolt','helmet'] %}
+<svg class="st-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+{% if name == 'layers' %}<path d="m12 3 10 5-10 5L2 8Zm-10 9 10 5 10-5M2 16l10 5 10-5"/>
+{% elif name == 'bars' %}<path d="M4 13h3v8H4zm7-5h3v13h-3zm7-6h3v19h-3z" fill="currentColor"/>
+{% elif name == 'card' %}<rect x="2" y="4" width="20" height="16" rx="2" fill="currentColor"/><path d="M2 9h20m-6 6h2" stroke="white"/>
+{% elif name == 'cash' %}<rect x="2" y="6" width="20" height="14" rx="2"/><path d="M6 2h12m-6 7v8m2-7h-3a1.5 1.5 0 0 0 0 3h2a1.5 1.5 0 0 1 0 3h-3"/>
+{% elif name == 'transfer' %}<path d="M3 7h18l-5-5m5 15H3l5 5M21 7l-5 5M3 17l5-5"/>
+{% elif name == 'bank' %}<path d="m3 8 9-5 9 5H3Zm0 13h18M5 11v6m5-6v6m4-6v6m5-6v6M3 18h18"/>
+{% elif name == 'drill' %}<path d="M14 6h7m-7 4h7M3 5h11v7H3zm3 7-1 8h6l-1-8m4-5h8"/>
+{% elif name == 'hammer' %}<path d="m15 12-8 9-4-4 9-8m-3-3 3-3 9 9-3 3z"/>
+{% elif name == 'bricks' %}<path d="M2 3h20v18H2zM2 9h20M2 15h20M12 3v6M8 9v6m8-6v6m-4 0v6"/>
+{% elif name == 'bolt' %}<path d="M8 7v14h8V7M6 3h12v4H6zm2 8 8-2m-8 6 8-2m-8 6 8-2"/>
+{% else %}<path d="M2 18h20v3H2zm2 0v-5a8 8 0 0 1 16 0v5M9 4v8m6-8v8"/>{% endif %}
+</svg>{% else %}{{ rs.icon(name) }}{% endif %}
+{% endmacro %}
+{% macro row_name(row, tab) %}<span class="rs-method"><span class="rs-{{ row[-1] }}">{{ symbol(row[-2]) }}</span>{{ row[0] }}</span>{% endmacro %}
+{% macro table(f, tab) %}
+<article class="rs-card rs-table-card">{{ rs.head('Detalle por categoría' if tab == 'categories' else 'Ventas por método de pago', 'Ver todo' if tab == 'payments' else None) }}
+<div class="rs-table-wrap"><table><colgroup>{% for width in ([5,23,14,9,13,12,12,14] if tab == 'categories' else [6,18,14,16,15,16,16]) %}<col style="width:{{ width }}%">{% endfor %}</colgroup><thead><tr>{% for title in (['#','Categoría','Productos vendidos','Unidades','Ingresos','Participación','Variación','Acciones'] if tab == 'categories' else ['#','Método','Transacciones','Monto total','Ticket prom.','Participación','Acciones']) %}<th scope="col">{{ title }}</th>{% endfor %}</tr></thead>
+<tbody>{% for row in f[tab] %}<tr><td>{{ loop.index }}</td><td>{{ row_name(row,tab) }}</td><td>{{ row[1] }}</td>{% if tab == 'categories' %}<td>{{ row[2] }}</td><td>$ {{ row[3] }}</td><td>{{ row[4] }}</td><td class="rs-green"><b>↑ {{ row[5] }}</b></td>{% else %}<td>$ {{ row[2] }}</td><td>$ {{ row[3] }}</td><td>{{ row[4] }}</td>{% endif %}<td><button type="button" class="rs-detail" data-rs-detail="{{ loop.index0 }}">Ver detalle</button></td></tr>{% endfor %}</tbody></table></div>
+<footer class="rs-pagination"><span>Mostrando 1 a {{ f[tab]|length }} de {{ f[tab]|length }} {{ 'categorías' if tab == 'categories' else 'métodos' }}</span><div><button type="button" aria-label="Página anterior" disabled>‹</button><button type="button" aria-current="page">1</button><button type="button" aria-label="Página siguiente" disabled>›</button></div></footer></article>
+{% endmacro %}
+{% macro ranking(f,tab) %}<article class="rs-card rs-ranking"><div class="rs-card-head"><h2>Top {{ 'categorías' if tab == 'categories' else 'métodos' }}</h2><select aria-label="Orden del ranking"><option>Por ingresos</option></select></div><ol>{% for row in f[tab] %}{% set amount = row[3] if tab == 'categories' else row[2] %}{% set highest = f[tab][0][3] if tab == 'categories' else f[tab][0][2] %}<li><span>{{ loop.index }}</span><span class="rs-rank-name">{{ row_name(row,tab) if tab == 'payments' else row[0] }}</span><span class="rs-progress"><i style="width:{{ amount|replace(',','')|float / (highest|replace(',','')|float) * 100 }}%"></i></span><strong>$ {{ amount }}</strong></li>{% endfor %}</ol></article>{% endmacro %}
+{% macro evolution(f,tab) %}<article class="rs-card rs-chart-card"><div class="rs-card-head"><div><h2>{{ 'Evolución por categoría' if tab == 'categories' else 'Evolución por método de pago' }}</h2>{% if tab == 'payments' %}<p>Número de transacciones mensuales por método de pago (últimos 12 meses)</p>{% endif %}</div><select aria-label="Frecuencia del gráfico"><option>Mensual</option></select></div><div class="rs-line" data-rs-chart="{{ tab }}"><canvas role="img" aria-label="{{ 'Ingresos por categoría' if tab == 'categories' else 'Transacciones por método de pago' }}"></canvas></div></article>{% endmacro %}
+{% macro summary(f,tab) %}<article class="rs-card rs-breakdown-summary">{{ rs.head('Resumen') }}<div class="rs-summary-details">{% if tab == 'categories' %}<span class="rs-circle rs-blue">{{ rs.icon('bulb') }}</span>{% endif %}<dl>{% for ico,tone,label,value in f.breakdown_summaries[tab] %}<div>{% if tab == 'payments' %}<span class="rs-circle rs-{{ tone }}">{{ symbol(ico) }}</span>{% endif %}<dt>{{ label }}</dt><dd>{{ value }}</dd></div>{% endfor %}</dl></div></article>{% endmacro %}
+{% macro content(f,tab) %}
+{% if tab == 'categories' %}<div class="rs-category-grid"><div class="rs-category-top"><article class="rs-card rs-bars-card">{{ rs.head('Ventas por categoría') }}<div class="rs-bars" data-rs-bars><canvas role="img" aria-label="Ingresos por categoría"></canvas></div></article>{{ rs.donut(f.donuts[tab]) }}</div>{{ table(f,tab) }}<div class="rs-category-right">{{ ranking(f,tab) }}{{ evolution(f,tab) }}{{ summary(f,tab) }}</div></div>
+{% else %}<div class="rs-payment-grid"><div class="rs-left">{{ table(f,tab) }}{{ evolution(f,tab) }}</div><div class="rs-right">{{ ranking(f,tab) }}{{ rs.donut(f.donuts[tab]) }}{{ summary(f,tab) }}</div></div>{% endif %}
+{% endmacro %}

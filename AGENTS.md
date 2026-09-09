@@ -6,7 +6,9 @@ This file is the single source of truth for assistants working in this repositor
 
 - Product name: **Ferretería y Construcciones El Conejo C.A.**
 - Backend: Python 3.10+, Flask application factory (`create_app`), Flask-Login, Flask-WTF, SQLAlchemy, PyMySQL, and MySQL 8.
-- Frontend: server-rendered Jinja2, Tabler (which already includes Bootstrap), native JavaScript, CSS, and Chart.js. Do not introduce a SPA framework or a second Bootstrap distribution.
+- Frontend: server-rendered Jinja2, native JavaScript, Chart.js, Tailwind CSS v4 for newly implemented reference-driven UI, and Lucide as the preferred icon system.
+- Existing Tabler/Bootstrap markup may remain temporarily during the screen-by-screen migration. Do not remove or rewrite unrelated legacy UI solely to complete the migration.
+- Do not introduce React, Next.js, Vue, or another SPA framework solely to use a component library.
 - Text presented to users is Spanish and encoded as UTF-8.
 
 ## Architecture boundaries
@@ -78,6 +80,62 @@ If TypeScript is introduced in an explicitly approved future change:
 ## Visual source and accessibility
 
 - Use `references/` as the approved visual direction and read `references/README.md` plus `references/MANIFEST.csv` before implementing a referenced screen.
+
+### Reference-driven frontend priority
+
+When implementing a screen that has an approved visual reference:
+
+- The approved reference controls the target macro-layout, visual hierarchy,
+  proportions, spacing, density, component placement, and visual language.
+- Existing backend behavior is a functional contract; the existing visual
+  arrangement is not.
+- Agents may substantially restructure Jinja markup and CSS to match the
+  reference, provided required routes, permissions, form fields, DOM IDs,
+  names, `data-*` attributes, selectors, event handlers, and API contracts
+  remain functional.
+- Do not preserve an old dashboard layout merely because it already exists.
+- Existing secondary widgets may be relocated, collapsed, or moved below the
+  primary viewport when necessary to match the approved reference.
+- Missing backend data or functionality must not be fabricated. Use truthful
+  values or truthful empty/insufficient-data states while preserving the
+  reference's intended geometry.
+- Backend-data differences from a mockup are acceptable.
+  Macro-layout differences from the approved reference are not acceptable
+  unless a documented functional or accessibility constraint requires them.
+- Visual fidelity must be evaluated using rendered screenshots at the same
+  viewport size and scale as the approved reference.
+- Do not claim visual parity until the rendered screen has been directly
+  compared with the approved reference.
+
+  ### Approved UI sources
+
+For reference-driven frontend implementation:
+
+- `references/` remains the final visual authority.
+- Use Tailwind CSS v4 utilities as the preferred styling system for newly
+  implemented or substantially redesigned reference-driven UI.
+- Use Lucide as the preferred icon system.
+- shadcn/ui `dashboard-01` is an approved structural and component reference
+  for dashboards.
+- Cruip Mosaic is an approved dashboard and layout reference. Prefer its
+  HTML/Tailwind patterns when adapting ideas to Jinja.
+- 21st.dev and Origin UI are approved sources for individual UI patterns and
+  components.
+- React/TSX examples from shadcn/ui, 21st.dev, or Origin UI must be adapted to
+  server-rendered Jinja/Tailwind rather than introducing React solely to use
+  them.
+- Do not copy mockup data, fake functionality, or unavailable routes from any
+  component source.
+- Component libraries are implementation references, not visual authorities.
+  When they differ from an approved screenshot in `references/`, the approved
+  screenshot wins.
+- Do not install additional component-library runtime dependencies unless they
+  are required by the adapted implementation and explicitly approved.
+
+  Use Lucide icons for all newly redesigned reference-driven UI.
+Do not mix Tabler Icons and Lucide within the same redesigned component unless
+required temporarily by preserved legacy markup.
+
 - **Never read, copy, package, or use anything in `references/90_archivo_no_usar/`.**
 - The official logo source is `references/00_marca/logo_oficial_el_conejo.png`. Preserve that source; copy it into `app/static/` only when the browser needs a static asset.
 - Use a light application background and sidebar, white cards, rounded surfaces, subtle borders/shadows, consistent spacing, and clear hierarchy. Use blue for navigation and primary actions, green for positive/available states, orange for warnings, and red for critical/destructive states.

@@ -1,0 +1,16 @@
+{% extends "ix_base.html" %}
+{# Base de las pantallas de Análisis predictivo: shell "ix" + predictive.css/js.
+   `fixture` solo existe en modo referencia (debug, ?ref=1); en modo normal es None. #}
+{% import "predictive/_macros.html" as px %}
+{% set sidebar_variant = "predictive" %}
+{% set ref_qs = "?ref=1" if reference_mode else "" %}
+
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/predictive.css') }}">
+{% endblock %}
+
+{% block main_class %} px-page{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/predictive.js') }}"></script>
+{% endblock %}

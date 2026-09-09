@@ -1,0 +1,44 @@
+{% extends "sales/_page.html" %}
+{# Lista de Ventas (panel "2. Lista de Ventas"): búsqueda, filtros tipo chip y tabla paginada. #}
+{% set active_page = "sales" %}
+
+{% block title %}Ventas — Lista{% endblock %}
+
+{% block main_class %} iv-page sa-page sa-list-page{% endblock %}
+
+{% block main %}
+{{ sa.header("Ventas", "Consulta y gestiona todas las ventas del sistema.",
+             fixture.search_placeholder if fixture else "", reference_mode=reference_mode) }}
+
+{% if not fixture %}
+{{ sa.unavailable("Lista de ventas") }}
+{% else %}
+{{ sa.toolbar(fixture.search, fixture.primary, dropdown=True) }}
+{{ sa.filters(fixture.filters) }}
+
+<section class="ix-card sa-table-card" aria-label="Ventas registradas">
+    <div class="px-table-wrap sa-table-wrap">
+        <table class="px-table sa-table sa-list-table">
+            <colgroup><col style="width: 117px"><col style="width: 151px"><col style="width: 233px"><col style="width: 119px"><col style="width: 166px"><col></colgroup>
+            <thead>
+                <tr>{% for c in fixture.columns %}<th scope="col">{{ c }}</th>{% endfor %}</tr>
+            </thead>
+            <tbody>
+                {% for s in fixture.rows %}
+                <tr>
+                    {# Solo la venta con detalle en el fixture enlaza a su pantalla; el resto es texto. #}
+                    <td>{% if s.number == fixture.detail %}<a href="{{ url_for('pages.sale_detail', sale_number=s.number) }}{{ ref_qs }}" class="sa-ref">{{ s.number }}</a>{% else %}<span class="sa-ref">{{ s.number }}</span>{% endif %}</td>
+                    <td class="sa-muted">{{ s.date }}</td>
+                    <td class="sa-muted">{{ s.customer }}</td>
+                    <td><strong>{{ s.total }}</strong></td>
+                    <td class="sa-muted">{{ s.method }}</td>
+                    <td>{{ sa.badge(s.status) }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {{ sa.pagination(fixture.pagination) }}
+</section>
+{% endif %}
+{% endblock %}

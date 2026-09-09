@@ -53,3 +53,9 @@ uploads/
 # Local AI runtime state
 .atl/
 /.pi/
+
+# Entorno virtual local usado por este proyecto
+/.venv/
+
+# Capturas y evidencias temporales de validación
+/.tmp/

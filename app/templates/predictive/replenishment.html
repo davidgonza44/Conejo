@@ -1,0 +1,103 @@
+{% extends "predictive/_page.html" %}
+{% import "predictive/_macros.html" as px %}
+{% set active_page = "replenishment" %}
+
+{% block title %}Reabastecimiento — Análisis predictivo{% endblock %}
+
+{% block head %}
+{{ super() }}
+{% if reference_mode and fixture %}<link rel="stylesheet" href="{{ url_for('static', filename='css/ix_replenishment_layers.css') }}">{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{{ super() }}
+{% if reference_mode and fixture %}<script src="{{ url_for('static', filename='js/ix_replenishment_layers.js') }}"></script>{% endif %}
+{% endblock %}
+
+{% block main %}
+{{ px.header("Reabastecimiento",
+             "Prioriza productos que requieren reposición y sugiere cantidades de compra.",
+             "Reabastecimiento", fixture.search_placeholder if fixture else "", "Generar orden de compra",
+             primary_icon="ti-shopping-cart", reference_mode=reference_mode) }}
+
+{% if not fixture %}
+{{ px.unavailable("Reabastecimiento") }}
+{% else %}
+<div style="--px-kpi-cols: 1fr 1fr 1fr 1.15fr">
+{{ px.kpis(fixture.kpis) }}
+
+<div class="px-body is-from-filters" style="--px-aside: 255px">
+    <div class="px-main">
+        {{ px.filters(fixture.filters, fill=True, extra_class="is-five") }}
+        {{ px.module_tabs("replenishment", ref_qs) }}
+        <section class="ix-card px-table-card is-replenishment" aria-labelledby="replenishment-title">
+            <h2 class="px-card-title" id="replenishment-title">{{ fixture.table_title }}</h2>
+            <div class="px-table-wrap">
+                <table class="px-table is-dense" style="--px-row: 44px">
+                    <colgroup>
+                        <col style="width: 214px"><col style="width: 82px"><col style="width: 83px"><col style="width: 89px">
+                        <col style="width: 91px"><col style="width: 94px"><col style="width: 67px"><col style="width: 97px">
+                        <col style="width: 96px"><col>
+                    </colgroup>
+                    <thead>
+                        <tr>
+                            <th scope="col">Producto</th>
+                            <th scope="col">Categoría</th>
+                            <th scope="col">Stock actual</th>
+                            <th scope="col">Demanda estimada<br><span class="px-th-sub">(30 días)</span></th>
+                            <th scope="col">Punto de reorden</th>
+                            <th scope="col">Cantidad sugerida</th>
+                            <th scope="col">Prioridad</th>
+                            <th scope="col">Fecha recomendada</th>
+                            <th scope="col">Costo estimado</th>
+                            <th scope="col" class="is-actions">Acciones</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for r in fixture.rows %}
+                        <tr>
+                            <td>{{ px.product_cell(r.p) }}</td>
+                            <td>{{ r.cat }}</td>
+                            <td><strong class="tone-red">{{ r.stock }}</strong></td>
+                            <td>{{ r.demand }}</td>
+                            <td>{{ r.reorder }}</td>
+                            <td>{{ r.qty }}</td>
+                            <td>{{ px.badge(r.prio) }}</td>
+                            <td>{{ r.date }}</td>
+                            <td><strong>{{ r.cost }}</strong></td>
+                            <td class="is-actions">{{ px.actions_cell() }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {{ px.pagination(fixture.pagination) }}
+        </section>
+    </div>
+
+    <aside class="px-aside" aria-label="Resumen de reabastecimiento">
+        {{ px.donut_card(fixture.donut, "replenishment-donut", "is-narrow") }}
+        <article class="ix-card px-aside-card px-top is-purchases">
+            <h2 class="px-card-title">{{ fixture.top.title }}</h2>
+            <ol class="px-top-list">
+                {% for p, qty, cost in fixture.top.rows %}
+                <li>
+                    <span class="px-top-rank">{{ loop.index }}</span>
+                    <span class="px-product">
+                        <span class="ix-thumb px-thumb"><img src="{{ url_for('static', filename=p.thumb) }}" alt=""></span>
+                        <span class="px-product-text">
+                            <span class="px-product-name">{{ p.name }}</span>
+                            <span class="px-top-sub"><span>{{ qty }}</span><span aria-hidden="true">|</span><span>{{ cost }}</span></span>
+                        </span>
+                    </span>
+                </li>
+                {% endfor %}
+            </ol>
+        </article>
+        {{ px.model_info_card(fixture.model_info, tinted=True) }}
+    </aside>
+</div>
+</div>
+{% if reference_mode %}{% include "predictive/_replenishment_layers.html" %}{% endif %}
+{% endif %}
+{% endblock %}

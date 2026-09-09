@@ -1,0 +1,82 @@
+{% extends "inventory/_page.html" %}
+{% import "predictive/_macros.html" as px %}
+{% import "inventory/_macros.html" as iv %}
+{% set active_page = "categories" %}
+{% set branch_sub = "Av. Bolívar, Valencia" %}
+
+{% block title %}Categorías — Inventario{% endblock %}
+
+{% block main_class %} iv-page iv-cat-page{% endblock %}
+
+{% block head %}
+{{ super() }}
+{% if reference_mode %}<link rel="stylesheet" href="{{ url_for('static', filename='css/ix_category_layers.css') }}">{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{{ super() }}
+{% if reference_mode %}
+{% include "inventory/_category_layers.html" %}
+<script src="{{ url_for('static', filename='js/ix_category_layers.js') }}"></script>
+{% endif %}
+{% endblock %}
+
+{% block main %}
+{{ iv.header("Categorías", "Organiza y administra las categorías de productos",
+             fixture.search_placeholder, actions=fixture.actions, reference_mode=reference_mode) }}
+
+<section class="iv-cat-top" aria-label="Resumen de categorías">
+    <div class="iv-cat-left">
+        {{ iv.kpis(fixture.kpis) }}
+        {{ px.filters(fixture.filters, extra_class="iv-cat-filters") }}
+    </div>
+
+    <article class="ix-card iv-cat-dist">
+        <h2 class="ix-card-title">{{ fixture.donut.title }}</h2>
+        <div class="iv-cat-dist-body">
+            <div class="iv-donut iv-donut-md" data-donut='{{ fixture.donut["items"] | map(attribute=3) | list | tojson }}' data-tones='{{ fixture.donut["items"] | map(attribute=2) | list | tojson }}' data-cutout="60">
+                <canvas role="img" aria-label="{{ fixture.donut.title }}"></canvas>
+            </div>
+            <ul class="iv-type-legend iv-cat-legend">
+                {% for name, pct, tone, _ in fixture.donut["items"] %}
+                <li><span class="ix-legend-dot iv-dot-{{ tone }}"></span><span class="iv-type-name">{{ name }}</span><span class="iv-type-value">{{ pct }}</span></li>
+                {% endfor %}
+            </ul>
+        </div>
+    </article>
+</section>
+
+<article class="ix-card iv-cat-table-card">
+    {{ iv.card_head(fixture.table.title) }}
+    <div class="px-table-wrap iv-table-wrap">
+        <table class="px-table iv-table iv-cat-table">
+            <colgroup>
+                <col style="width: 263px"><col style="width: 320px"><col style="width: 190px">
+                <col style="width: 188px"><col style="width: 130px"><col>
+            </colgroup>
+            <thead>
+                <tr>{% for c in fixture.table.columns %}<th scope="col"{% if loop.index > 2 %} class="is-center"{% endif %}>{{ c }}</th>{% endfor %}</tr>
+            </thead>
+            <tbody>
+                {% for c in fixture.table.rows %}
+                <tr>
+                    <td>
+                        <span class="iv-cat-name">
+                            <span class="iv-cat-icon tone-{{ c.tone }}" aria-hidden="true">{{ iv.icon(c.icon) }}</span>{{ c.name }}
+                        </span>
+                    </td>
+                    <td class="px-cell-muted">{{ c.description }}</td>
+                    <td class="is-center px-cell-muted">{{ c.products }}</td>
+                    <td class="is-center">{{ c.value }}</td>
+                    <td class="is-center"><span class="px-badge is-{{ c.status[1] }} iv-badge-dot">{{ c.status[0] }}</span></td>
+                    <td class="is-center">{{ iv.row_actions() }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {{ px.pagination(fixture.table.pagination) }}
+</article>
+
+{{ iv.footer(fixture.footer) }}
+{% endblock %}

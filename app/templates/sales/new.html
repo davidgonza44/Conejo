@@ -1,0 +1,117 @@
+{% extends "sales/_page.html" %}
+{# Nueva venta (panel "3. Nueva Venta"). En modo referencia los controles son de presentación:
+   no existe formulario ni envío; no se crea ninguna venta ni se altera el stock. #}
+{% set active_page = "sales_new" %}
+
+{% block title %}Nueva venta — Ventas{% endblock %}
+
+{% block main_class %} iv-page sa-page sa-new-page{% endblock %}
+
+{% block head %}
+{{ super() }}
+{% if reference_mode and fixture %}<link rel="stylesheet" href="{{ url_for('static', filename='css/ix_sale_product_layers.css') }}">{% endif %}
+{% if reference_mode and fixture %}<link rel="stylesheet" href="{{ url_for('static', filename='css/ix_sale_controls.css') }}">{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{{ super() }}
+{% if reference_mode and fixture %}<script src="{{ url_for('static', filename='js/ix_sale_product_layers.js') }}"></script>{% endif %}
+{% if reference_mode and fixture %}<script src="{{ url_for('static', filename='js/ix_sale_controls.js') }}"></script>{% endif %}
+{% endblock %}
+
+{% block main %}
+{{ sa.header("Nueva venta", "Registra una nueva venta en el sistema.",
+             fixture.search_placeholder if fixture else "", reference_mode=reference_mode) }}
+
+{% if not fixture %}
+{{ sa.unavailable("Nueva venta") }}
+{% else %}
+<div class="sa-actionbar">
+    <a href="{{ url_for('pages.sales_list') }}{{ ref_qs }}" class="sa-back"><i class="ti ti-arrow-left" aria-hidden="true"></i>{{ fixture.back }}</a>
+    <div class="px-actions sa-actionbar-actions">
+        {{ sa.btn("Cancelar", extra_class="is-ghost") }}
+        {{ sa.btn("Guardar", primary=True) }}
+        {{ sa.icon_btn("ti-chevron-down", "Más opciones de guardado", primary=True) }}
+    </div>
+</div>
+
+<section class="sa-new-top" aria-label="Cliente e información de la venta">
+    {% set c = fixture.customer %}
+    <article class="ix-card sa-form-card">
+        <h2 class="sa-form-title">{{ c.title }}</h2>
+        <label class="px-search sa-field-search">
+            <i class="ti ti-search" aria-hidden="true"></i>
+            <input type="search" placeholder="{{ c.search }}" aria-label="{{ c.search }}">
+        </label>
+        <div class="sa-customer">
+            <span class="sa-customer-icon" aria-hidden="true">{{ iv.icon("svg:user") }}</span>
+            <span class="ix-row-text">
+                <span class="ix-row-title">{{ c.name }}</span>
+                <span class="ix-row-desc">{{ c.line1 }}</span>
+                <span class="ix-row-desc">{{ c.line2 }}</span>
+            </span>
+            <button type="button" class="sa-customer-remove" aria-label="Quitar cliente"><i class="ti ti-x" aria-hidden="true"></i></button>
+        </div>
+    </article>
+
+    <article class="ix-card sa-form-card">
+        <h2 class="sa-form-title">{{ fixture.sale.title }}</h2>
+        <div class="sa-fields">
+            {% for label, value, select in fixture.sale.fields %}
+            <div class="sa-field">
+                <span class="sa-field-label">{{ label }}</span>
+                <span class="sa-field-box{{ ' is-select' if select }}" role="{{ 'button' if select else 'textbox' }}" aria-label="{{ label }}" aria-readonly="true">{{ value }}{% if select %}<i class="ti ti-chevron-down" aria-hidden="true"></i>{% endif %}</span>
+            </div>
+            {% endfor %}
+        </div>
+    </article>
+</section>
+
+{% set p = fixture.products %}
+<section class="ix-card sa-products-card" aria-label="Productos de la venta">
+    <h2 class="sa-form-title">{{ p.title }}</h2>
+    <div class="sa-products-bar">
+        <label class="px-search sa-product-search">
+            <i class="ti ti-search" aria-hidden="true"></i>
+            <input type="search" placeholder="{{ p.search }}" aria-label="{{ p.search }}">
+            <i class="ti ti-chevron-down sa-search-chevron" aria-hidden="true"></i>
+        </label>
+        <div class="px-actions sa-products-actions">
+            {% for label, ico, primary in p.actions %}{{ sa.btn(label, ico, primary) }}{% endfor %}
+        </div>
+    </div>
+
+    <div class="sa-lines">
+        <table class="px-table sa-table sa-lines-table">
+            <colgroup><col style="width: 44px"><col><col style="width: 90px"><col style="width: 96px"><col style="width: 100px"><col style="width: 111px"><col style="width: 44px"></colgroup>
+            <thead>
+                <tr>{% for c in p.columns %}<th scope="col"{% if loop.index == 3 %} class="is-end"{% endif %}>{{ c }}</th>{% endfor %}</tr>
+            </thead>
+            <tbody>
+                {% for prod, code, price, qty, disc, total in p.rows %}
+                <tr>
+                    <td class="sa-muted">{{ loop.index }}</td>
+                    <td>{{ sa.product(prod, code) }}</td>
+                    <td class="is-end">{{ price }}</td>
+                    <td><span class="sa-qty" role="spinbutton" aria-label="Cantidad" aria-valuenow="{{ qty }}" aria-readonly="true">{{ qty }}<i class="ti ti-selector" aria-hidden="true"></i></span></td>
+                    <td><span class="sa-disc" role="button" aria-label="Descuento">{{ disc }}<i class="ti ti-chevron-down" aria-hidden="true"></i></span></td>
+                    <td><strong>{{ total }}</strong></td>
+                    <td><button type="button" class="sa-remove" aria-label="Quitar {{ prod.name }}"><i class="ti ti-trash" aria-hidden="true"></i></button></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <footer class="sa-totals-bar">
+        <span class="sa-count">{{ p.count }}</span>
+        <dl class="sa-totals">
+            {% for label, value, strong in p.totals %}
+            <div class="sa-total-row{{ ' is-total' if strong }}"><dt>{{ label }}</dt><dd>{{ value }}</dd></div>
+            {% endfor %}
+        </dl>
+    </footer>
+</section>
+{% if reference_mode %}{% include "sales/_sale_product_layers.html" %}{% endif %}
+{% endif %}
+{% endblock %}
