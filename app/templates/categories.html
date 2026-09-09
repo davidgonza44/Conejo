@@ -1,7 +1,7 @@
 {% extends "base_app.html" %}
 {% set active_page = "categories" %}
 
-{% block title %}Categorías — Ferretería El Conejo{% endblock %}
+{% block title %}Categorías — Ferretería y Construcciones El Conejo C.A.{% endblock %}
 
 {% block head %}
 <link rel="stylesheet" href="{{ url_for('static', filename='css/products.css') }}">
@@ -16,7 +16,8 @@
             <h1 class="page-title mb-1">
                 <i class="ti ti-category me-2 text-primary"></i>Categorías
             </h1>
-            <div class="text-secondary" id="categories-count">Cargando…</div>
+            <div class="text-secondary">Organiza y administra las categorías de productos.</div>
+            <div class="text-secondary small" id="categories-count">Cargando…</div>
         </div>
         {% if can_write %}
         <div class="col-auto">

@@ -1,7 +1,14 @@
 /* Ajustes mínimos sobre Tabler para las páginas de autenticación. */
 
 .page-center .container-tight {
-    max-width: 30rem;
+    max-width: 32rem;
+}
+
+.app-auth-brand h1 {
+    max-width: 22rem;
+    margin-left: auto;
+    margin-right: auto;
+    line-height: 1.25;
 }
 
 /* El código de desarrollo del passwordless debe poder copiarse fácil. */

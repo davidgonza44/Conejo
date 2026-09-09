@@ -6,6 +6,14 @@
 
     const $ = (id) => document.getElementById(id);
 
+    function landingPath(user) {
+        const role = user && user.role;
+        if (role === "admin" || role === "inventario") {
+            return "/dashboard";
+        }
+        return "/delivery-notes";
+    }
+
     function showAlert(el, message) {
         el.textContent = message;
         el.classList.remove("d-none");
@@ -50,7 +58,7 @@
         try {
             const { ok, data } = await postJson("/api/auth/login", { identifier, password });
             if (ok) {
-                window.location.href = "/dashboard";
+                window.location.href = landingPath(data.user);
                 return;
             }
             showAlert($("login-error"), data.error || "No fue posible iniciar sesión.");
@@ -116,7 +124,7 @@
         try {
             const { ok, data } = await postJson("/api/auth/passwordless/verify", { email, token });
             if (ok) {
-                window.location.href = "/dashboard";
+                window.location.href = landingPath(data.user);
                 return;
             }
             showAlert($("pwl-error"), data.error || "Código inválido o vencido.");

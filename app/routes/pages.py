@@ -37,7 +37,7 @@ def login():
     if current_user.is_authenticated:
         if current_user.role in _DASHBOARD_ROLES:
             return redirect(url_for("pages.dashboard"))
-        return redirect(url_for("pages.access_denied"))
+        return redirect(url_for("pages.delivery_notes"))
     return render_template("login.html")
 
 
